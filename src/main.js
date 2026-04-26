@@ -48,6 +48,7 @@ app.whenReady().then(() => {
   );
 
   createWindow();
+  pineconeService.load();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -227,6 +228,7 @@ function startDoubaoStream(lang) {
       if (parsed.type === 'result') {
         const result = parsed.payload?.result;
         if (result) {
+          console.log('[DOUBAO] utterances:', JSON.stringify(result.utterances?.map(u => ({ text: u.text?.substring(0, 30), definite: u.definite }))));
           mainWindow?.webContents.send('stream-result', {
             text: result.text || '',
             utterances: result.utterances || [],
@@ -382,3 +384,136 @@ async function transcribeWithLocal(audioBuffer, lang) {
     if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
   }
 }
+
+// ============================================================
+// AI 面试助手 - Gemini + RAG
+// ============================================================
+
+import { streamChat, queryChat } from './lib/gemini.js';
+import { ragOrchestrator } from './lib/ragOrchestrator.js';
+import { pineconeService } from './lib/pineconeService.js';
+import { resumeAnalyzer } from './lib/resumeAnalyzer.js';
+import {
+  buildPrompt, buildKnowledgeCheckPrompt, buildRAGPrompt,
+  buildSummarizerPrompt, buildInterviewerPrompt, buildQuestionRecommendPrompt,
+} from './lib/prompts.js';
+import { dialog } from 'electron';
+
+let uploadedPDFs = []; // kept for backward compat but also synced from local store
+
+async function streamToRenderer(messages) {
+  const useModel = process.env.MAIN_MODEL || 'vtrix-gemini-3-flash-preview';
+  console.log('[AI] streamChat model:', useModel, 'baseURL:', process.env.LLM_BASE_URL);
+  const stream = await streamChat(messages, useModel);
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (content) mainWindow?.webContents.send('ai-stream', content);
+  }
+}
+
+ipcMain.handle('ai-completion', async (_event, { text, mode, background }) => {
+  try {
+    if (mode === 'summarizer') {
+      await streamToRenderer([{ role: 'user', content: buildSummarizerPrompt(text) }]);
+      mainWindow?.webContents.send('ai-stream-end', { citations: [] });
+      return { success: true };
+    }
+
+    if (mode === 'interviewer-evaluate') {
+      await streamToRenderer([
+        { role: 'system', content: '你是一位资深技术面试官，请用中文回答。' },
+        { role: 'user', content: buildInterviewerPrompt(background, '', text) },
+      ]);
+      mainWindow?.webContents.send('ai-stream-end', { citations: [] });
+      return { success: true };
+    }
+
+    if (mode === 'interviewer-recommend') {
+      const responseText = await queryChat([
+        { role: 'system', content: '你是一位资深技术面试官，请用中文回答。' },
+        { role: 'user', content: buildQuestionRecommendPrompt(background, text) },
+      ], process.env.MAIN_MODEL);
+      mainWindow?.webContents.send('ai-stream', responseText);
+      mainWindow?.webContents.send('ai-stream-end', { citations: [] });
+      return { success: true };
+    }
+
+    // Copilot mode: knowledge check → RAG
+    const checkText = await queryChat([
+      { role: 'user', content: buildKnowledgeCheckPrompt(text) },
+    ]);
+
+    if (checkText.startsWith('KNOWN:')) {
+      await streamToRenderer([
+        { role: 'system', content: '你是一位专业的面试助手，帮助面试者回答技术问题。请用中文回答，简洁有条理。' },
+        { role: 'user', content: buildPrompt(background, text) },
+      ]);
+      mainWindow?.webContents.send('ai-stream-end', { citations: [] });
+    } else {
+      const ragResponse = await ragOrchestrator.processTranscript(text, background);
+      const extractedQ = ragResponse.extractedQuestion?.question || text;
+      mainWindow?.webContents.send('ai-question', extractedQ);
+
+      if (ragResponse.searchPerformed && ragResponse.context.combinedContext) {
+        await streamToRenderer([
+          { role: 'system', content: '你是一位专业的面试助手。基于提供的上下文和你的知识，给出最全面准确的回答。请用中文回答。' },
+          { role: 'user', content: buildRAGPrompt(background, text, extractedQ, ragResponse.context.combinedContext) },
+        ]);
+        mainWindow?.webContents.send('ai-stream-end', { citations: ragResponse.context.citations });
+      } else {
+        await streamToRenderer([
+          { role: 'system', content: '你是一位专业的面试助手，帮助面试者回答技术问题。请用中文回答，简洁有条理。' },
+          { role: 'user', content: buildPrompt(background, text) },
+        ]);
+        mainWindow?.webContents.send('ai-stream-end', { citations: [] });
+      }
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('[AI] Completion error:', err);
+    mainWindow?.webContents.send('ai-stream-end', { citations: [], error: err.message });
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('upload-pdf', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+
+    const filePath = result.filePaths[0];
+    const filename = path.basename(filePath);
+    const buffer = fs.readFileSync(filePath);
+
+    const send = (type, data) => {
+      mainWindow?.webContents.send('pdf-agent-stream', type, data);
+    };
+
+    const agentResult = await resumeAnalyzer.process(buffer, filename, send);
+    return agentResult;
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('delete-pdf', async (_event, filename) => {
+  try {
+    const success = await ragOrchestrator.deletePDF(filename);
+    if (success) {
+      uploadedPDFs = uploadedPDFs.filter(p => p.filename !== filename);
+    }
+    return { success };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('list-pdfs', async () => {
+  const pdfs = pineconeService.getUploadedFiles();
+  return { success: true, pdfs };
+});

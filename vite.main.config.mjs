@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   build: {
     rollupOptions: {
-      external: ['nodejs-whisper', 'ws', 'dotenv'],
+      external: ['nodejs-whisper', 'ws', 'dotenv', 'openai', '@tavily/core', 'pdf-parse'],
     },
   },
 });

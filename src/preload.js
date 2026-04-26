@@ -11,6 +11,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onStreamResult: (callback) => ipcRenderer.on('stream-result', (_event, value) => callback(value)),
   onStreamError: (callback) => ipcRenderer.on('stream-error', (_event, value) => callback(value)),
 
+  // AI 面试助手
+  aiCompletion: (text, mode, background) => ipcRenderer.invoke('ai-completion', { text, mode, background }),
+  onAIStream: (callback) => ipcRenderer.on('ai-stream', (_event, value) => callback(value)),
+  onAIStreamEnd: (callback) => ipcRenderer.on('ai-stream-end', (_event, value) => callback(value)),
+  onAIQuestion: (callback) => ipcRenderer.on('ai-question', (_event, value) => callback(value)),
+
+  // PDF 管理
+  uploadPDF: () => ipcRenderer.invoke('upload-pdf'),
+  deletePDF: (filename) => ipcRenderer.invoke('delete-pdf', filename),
+  listPDFs: () => ipcRenderer.invoke('list-pdfs'),
+  onPDFStatus: (callback) => ipcRenderer.on('pdf-status', (_event, value) => callback(value)),
+
+  // PDF 分析 Agent
+  onPDFAgentProgress: (callback) => ipcRenderer.on('pdf-agent-progress', (_event, value) => callback(value)),
+  onPDFAgentStream: (callback) => ipcRenderer.on('pdf-agent-stream', (_event, type, value) => callback(type, value)),
+
   // 通用
   onError: (callback) => ipcRenderer.on('transcription-error', (_event, value) => callback(value)),
 })
