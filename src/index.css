@@ -1,0 +1,199 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f0f;
+  color: #e0e0e0;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-app-region: drag;
+}
+
+button, select, input, textarea, .result-box, .settings-panel {
+  -webkit-app-region: no-drag;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  padding: 2rem;
+  position: relative;
+}
+
+.title {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 0.3rem;
+}
+
+.subtitle {
+  font-size: 0.9rem;
+  color: #888;
+  margin-bottom: 2rem;
+}
+
+/* 录音按钮 */
+.record-btn {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 3px solid #333;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  position: relative;
+  margin-bottom: 2rem;
+}
+
+.record-btn:hover {
+  border-color: #555;
+  background: #222;
+}
+
+.record-btn.recording {
+  border-color: #ef4444;
+  background: #7f1d1d;
+  color: #fca5a5;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
+}
+
+/* 结果区域 */
+.result-area {
+  width: 100%;
+  max-width: 700px;
+  min-height: 150px;
+  max-height: 350px;
+  overflow-y: auto;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.result-text {
+  font-size: 0.95rem;
+  line-height: 1.8;
+  color: #ccc;
+  white-space: pre-wrap;
+}
+
+.result-text.placeholder {
+  color: #555;
+}
+
+/* 流式识别文字样式 */
+.result-text .definite {
+  color: #e0e0e0;
+}
+
+.result-text .interim {
+  color: #888;
+  font-style: italic;
+}
+
+/* 操作按钮 */
+.actions {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.action-btn {
+  padding: 0.5rem 1.5rem;
+  border-radius: 8px;
+  border: 1px solid #333;
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn:hover { background: #252525; border-color: #555; }
+.action-btn.secondary { color: #888; }
+
+/* 设置按钮 */
+.settings-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.settings-btn:hover { color: #aaa; background: #1a1a1a; }
+
+/* 设置面板 */
+.settings-panel {
+  position: absolute;
+  top: 3.5rem;
+  right: 1rem;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 1.2rem;
+  width: 300px;
+  z-index: 10;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.settings-panel.hidden { display: none; }
+
+.settings-panel h3 {
+  font-size: 0.95rem;
+  margin-bottom: 1rem;
+  color: #fff;
+}
+
+.setting-item {
+  margin-bottom: 0.8rem;
+}
+
+.setting-item label {
+  display: block;
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 0.3rem;
+}
+
+.setting-item select,
+.setting-item input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+}
+
+.setting-item select:focus,
+.setting-item input:focus {
+  outline: none;
+  border-color: #555;
+}
+
+.setting-hint {
+  font-size: 0.75rem;
+  color: #666;
+  margin-top: 0.5rem;
+  line-height: 1.4;
+}
