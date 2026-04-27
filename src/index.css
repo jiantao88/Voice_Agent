@@ -132,6 +132,49 @@ body {
   margin-top: 8px;
 }
 
+.toggle-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toggle-item label {
+  margin-bottom: 0;
+}
+
+.toggle-item input[type="checkbox"] {
+  width: 36px;
+  height: 20px;
+  appearance: none;
+  background: #333;
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-item input[type="checkbox"]::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #888;
+  border-radius: 50%;
+  transition: all 0.2s;
+}
+
+.toggle-item input[type="checkbox"]:checked {
+  background: #1a5fb4;
+}
+
+.toggle-item input[type="checkbox"]:checked::after {
+  left: 18px;
+  background: #fff;
+}
+
 /* Main Content */
 .main-content {
   display: flex;

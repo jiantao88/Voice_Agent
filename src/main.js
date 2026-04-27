@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, ipcMain, session, desktopCapturer } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,6 +9,19 @@ import started from 'electron-squirrel-startup';
 import WebSocket from 'ws';
 
 dotenvConfig({ path: path.join(app.getAppPath(), '.env') });
+
+// 系统音频捕获：设置 Chromium feature flags（必须在 app.ready 之前）
+const loopbackFeatures = [
+  'MacLoopbackAudioForScreenShare',
+  'MacSckSystemAudioLoopbackOverride',
+  'PulseaudioLoopbackForScreenShare',
+];
+const existing = app.commandLine.getSwitchValue('enable-features');
+if (app.commandLine.hasSwitch('enable-features')) {
+  app.commandLine.removeSwitch('enable-features');
+}
+const allFeatures = [existing, ...loopbackFeatures].filter(Boolean).join(',');
+app.commandLine.appendSwitch('enable-features', allFeatures);
 
 if (started) {
   app.quit();
@@ -39,7 +52,7 @@ const createWindow = () => {
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler(
     (webContents, permission, callback) => {
-      if (permission === 'media') {
+      if (permission === 'media' || permission === 'display-capture') {
         callback(true);
       } else {
         callback(false);
@@ -291,6 +304,19 @@ function stopDoubaoStream() {
 // ============================================================
 // IPC Handlers
 // ============================================================
+
+// 系统音频捕获（ScreenCaptureKit loopback）
+ipcMain.handle('enable-loopback-audio', () => {
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    const sources = await desktopCapturer.getSources({ types: ['screen'] });
+    if (sources.length === 0) throw new Error('No screen sources found');
+    callback({ video: sources[0], audio: 'loopback' });
+  });
+});
+
+ipcMain.handle('disable-loopback-audio', () => {
+  session.defaultSession.setDisplayMediaRequestHandler(null);
+});
 
 ipcMain.handle('start-doubao-stream', async (_event, settings) => {
   try {

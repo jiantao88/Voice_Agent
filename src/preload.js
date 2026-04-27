@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onStreamResult: (callback) => ipcRenderer.on('stream-result', (_event, value) => callback(value)),
   onStreamError: (callback) => ipcRenderer.on('stream-error', (_event, value) => callback(value)),
 
+  // 系统音频捕获
+  enableLoopbackAudio: () => ipcRenderer.invoke('enable-loopback-audio'),
+  disableLoopbackAudio: () => ipcRenderer.invoke('disable-loopback-audio'),
+
   // AI 面试助手
   aiCompletion: (text, mode, background) => ipcRenderer.invoke('ai-completion', { text, mode, background }),
   onAIStream: (callback) => ipcRenderer.on('ai-stream', (_event, value) => callback(value)),

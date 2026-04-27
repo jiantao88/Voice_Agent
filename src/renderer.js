@@ -39,12 +39,14 @@ const clearHistoryBtn = document.getElementById('clearHistoryBtn')
 
 let isRecording = false
 let mediaStream = null
+let systemAudioStream = null
 let audioContext = null
 let scriptProcessor = null
 let currentMode = 'candidate'
 let history = JSON.parse(localStorage.getItem('interview-history') || '[]')
 let isAIProcessing = false
 let aiStreamText = ''
+let captureSystemAudio = localStorage.getItem('capture-system-audio') === 'true'
 
 // --- 段落管理 ---
 let segments = []
@@ -147,12 +149,15 @@ function renderSegments() {
 }
 
 // --- 设置管理 ---
+const systemAudioToggle = document.getElementById('systemAudioToggle')
+
 function loadSettings() {
   const saved = localStorage.getItem('vtt-settings')
   if (saved) {
     const s = JSON.parse(saved)
     langSelect.value = s.lang || 'zh'
   }
+  systemAudioToggle.checked = captureSystemAudio
 }
 
 function saveSettings() {
@@ -160,6 +165,11 @@ function saveSettings() {
 }
 
 langSelect.addEventListener('change', saveSettings)
+
+systemAudioToggle.addEventListener('change', () => {
+  captureSystemAudio = systemAudioToggle.checked
+  localStorage.setItem('capture-system-audio', captureSystemAudio)
+})
 
 settingsBtn.addEventListener('click', (e) => {
   e.stopPropagation()
@@ -254,6 +264,11 @@ async function stopRecording() {
     mediaStream = null
   }
 
+  if (systemAudioStream) {
+    systemAudioStream.getTracks().forEach(t => t.stop())
+    systemAudioStream = null
+  }
+
   // 如果当前段落为空，移除它
   const idx = segments.findIndex(s => s.id === currentSegmentId)
   if (idx !== -1 && !segments[idx].text.trim()) {
@@ -275,7 +290,29 @@ async function startDoubaoStreaming() {
   if (!result.success) throw new Error(result.error)
 
   audioContext = new AudioContext({ sampleRate: 16000 })
-  const source = audioContext.createMediaStreamSource(mediaStream)
+  const micSource = audioContext.createMediaStreamSource(mediaStream)
+
+  // 混合节点：麦克风 + 系统音频（如果开启）
+  const merger = audioContext.createChannelMerger(1)
+  micSource.connect(merger, 0, 0)
+
+  if (captureSystemAudio) {
+    try {
+      await window.electronAPI.enableLoopbackAudio()
+      systemAudioStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      // 移除不需要的视频轨道
+      systemAudioStream.getVideoTracks().forEach(t => { t.stop(); systemAudioStream.removeTrack(t) })
+      await window.electronAPI.disableLoopbackAudio()
+
+      const sysSource = audioContext.createMediaStreamSource(systemAudioStream)
+      sysSource.connect(merger, 0, 0)
+      statusText.textContent = '正在实时识别（含系统音频）...'
+    } catch (err) {
+      console.warn('系统音频捕获失败，仅使用麦克风:', err.message)
+      systemAudioStream = null
+    }
+  }
+
   scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1)
 
   scriptProcessor.onaudioprocess = (e) => {
@@ -305,7 +342,7 @@ async function startDoubaoStreaming() {
     window.electronAPI.sendChunk(Array.from(int16), false)
   }
 
-  source.connect(scriptProcessor)
+  merger.connect(scriptProcessor)
   scriptProcessor.connect(audioContext.destination)
 }
 

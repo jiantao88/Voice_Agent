@@ -42,7 +42,11 @@
           <label>音频输入设备</label>
           <select id="audioDeviceSelect"><option value="">默认设备</option></select>
         </div>
-        <div class="setting-hint">提示：捕获系统音频需要安装 BlackHole 虚拟音频驱动</div>
+        <div class="setting-item toggle-item">
+          <label for="systemAudioToggle">捕获系统音频（对方声音）</label>
+          <input type="checkbox" id="systemAudioToggle" />
+        </div>
+        <div class="setting-hint">开启后可识别视频通话中对方的声音，首次使用需授权屏幕录制权限</div>
       </div>
 
       <!-- 主内容：双栏布局 -->
