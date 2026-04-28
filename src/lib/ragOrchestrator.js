@@ -4,34 +4,75 @@ import { pineconeService } from './pineconeService.js';
 import { webSearchAgent } from './webSearch.js';
 
 class RAGOrchestrator {
-  async processTranscript(transcript, background) {
+  async processTranscript(transcript, background, options = {}) {
+    const { group, debug } = options;
+    const debugTrace = debug ? { timings: {} } : null;
+    const totalStart = Date.now();
+
     try {
       let extractedQuestion = null;
+      const qStart = Date.now();
+      let extractionMethod = 'none';
       try {
         extractedQuestion = await extractQuestionFromTranscript(transcript);
         if (!extractedQuestion || extractedQuestion.confidence < 0.4) extractedQuestion = null;
+        else extractionMethod = 'cloud';
       } catch (error) {
         const localQuestion = extractQuestionLocally(transcript);
         if (localQuestion && localQuestion.confidence >= 0.5) {
           extractedQuestion = localQuestion;
+          extractionMethod = 'local';
         }
+      }
+      if (debugTrace) {
+        debugTrace.timings.questionExtraction = Date.now() - qStart;
+        debugTrace.extractedQuestion = extractedQuestion
+          ? { question: extractedQuestion.question, confidence: extractedQuestion.confidence, method: extractionMethod }
+          : null;
       }
 
       let searchQuery = extractedQuestion?.question || generateSearchQuery(transcript);
       if (!searchQuery || searchQuery.length < 10) {
-        return { extractedQuestion: null, context: { pdfResults: [], webResults: [], combinedContext: '', citations: [] }, searchPerformed: false };
+        if (debugTrace) debugTrace.searchQuery = searchQuery || '';
+        return { extractedQuestion: null, context: { pdfResults: [], webResults: [], combinedContext: '', citations: [] }, searchPerformed: false, debugTrace };
       }
+      if (debugTrace) debugTrace.searchQuery = searchQuery;
 
+      const pdfStart = Date.now();
+      const webStart = Date.now();
       const [pdfResults, webSearchResponse] = await Promise.all([
-        pineconeService.searchSimilarContent(searchQuery, 3).catch(() => []),
+        pineconeService.searchSimilarContent(searchQuery, 3, { group }).catch(() => []),
         webSearchAgent.searchWeb(searchQuery, 3).catch(() => ({ results: [] })),
       ]);
+      if (debugTrace) {
+        debugTrace.timings.pdfSearch = Date.now() - pdfStart;
+        debugTrace.timings.webSearch = Date.now() - webStart;
+        debugTrace.pdfResults = pdfResults.map(r => ({
+          id: r.id, content: r.content.substring(0, 200), score: r.score,
+          filename: r.metadata?.filename, group: r.group, page: r.page,
+        }));
+        debugTrace.webResults = (webSearchResponse.results || []).map(r => ({
+          content: (r.snippet || '').substring(0, 200), score: r.score, link: r.link,
+        }));
+      }
 
       const context = this.combineContexts(pdfResults, webSearchResponse.results);
-      return { extractedQuestion, context, searchPerformed: true };
+
+      if (debugTrace) {
+        debugTrace.timings.total = Date.now() - totalStart;
+        debugTrace.rankedResults = context.citations.map(c => ({
+          sourceType: c.sourceType, filename: c.filename, score: c.score, contextSnippet: c.contextSnippet,
+        }));
+        debugTrace.promptContext = {
+          contextLength: context.combinedContext.length,
+          citationCount: context.citations.length,
+        };
+      }
+
+      return { extractedQuestion, context, searchPerformed: true, debugTrace };
     } catch (error) {
       console.error('Error in RAG processing:', error);
-      return { extractedQuestion: null, context: { pdfResults: [], webResults: [], combinedContext: '', citations: [] }, searchPerformed: false };
+      return { extractedQuestion: null, context: { pdfResults: [], webResults: [], combinedContext: '', citations: [] }, searchPerformed: false, debugTrace };
     }
   }
 

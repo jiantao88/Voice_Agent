@@ -47,6 +47,24 @@
           <input type="checkbox" id="systemAudioToggle" />
         </div>
         <div class="setting-hint">开启后可识别视频通话中对方的声音，首次使用需授权屏幕录制权限</div>
+        <div class="setting-item">
+          <label>语音识别引擎</label>
+          <select id="asrEngineSelect">
+            <option value="doubao">云端识别（豆包）</option>
+            <option value="local">本地识别（Paraformer）</option>
+          </select>
+        </div>
+        <div class="setting-item model-status-item hidden" id="modelStatusItem">
+          <div class="model-status" id="modelStatus">
+            <span class="model-status-icon" id="modelStatusIcon">⏳</span>
+            <span class="model-status-text" id="modelStatusText">检测模型中...</span>
+          </div>
+          <button class="small-btn primary" id="downloadModelBtn" style="display:none">下载模型</button>
+          <div class="model-progress hidden" id="modelProgress">
+            <div class="model-progress-bar"><div class="model-progress-fill" id="modelProgressFill"></div></div>
+            <span class="model-progress-text" id="modelProgressText">0%</span>
+          </div>
+        </div>
       </div>
 
       <!-- 主内容：双栏布局 -->
@@ -75,7 +93,10 @@
           <div class="panel-section pdf-section">
             <div class="section-header">
               <h2>知识库</h2>
-              <button class="small-btn primary" id="uploadPDFBtn">+ 上传简历/文档</button>
+              <div class="kb-header-actions">
+                <button class="small-btn" id="manageKBBtn">管理</button>
+                <button class="small-btn primary" id="uploadPDFBtn">+ 上传文档</button>
+              </div>
             </div>
 
             <!-- 分析进度面板 -->
@@ -105,6 +126,15 @@
               <div class="placeholder-text">AI 回答将显示在这里...</div>
             </div>
             <div class="ai-citations" id="aiCitations"></div>
+
+            <!-- RAG 调试面板 -->
+            <div class="rag-debug-panel hidden" id="ragDebugPanel">
+              <div class="rag-debug-toggle" id="ragDebugToggle">
+                <span>RAG 调试详情</span>
+                <span class="debug-arrow">▸</span>
+              </div>
+              <div class="rag-debug-content hidden" id="ragDebugContent"></div>
+            </div>
           </div>
 
           <!-- 面试官模式 -->
@@ -134,6 +164,89 @@
               <button class="small-btn" id="clearHistoryBtn">清空</button>
             </div>
             <div class="history-list" id="historyList"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 知识库管理全屏页面 -->
+      <div class="kb-fullpage hidden" id="kbFullpage">
+        <div class="kb-fullpage-header">
+          <div class="kb-fullpage-header-left">
+            <button class="kb-back-btn" id="kbBackBtn">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3L5 8l5 5"/></svg>
+              返回
+            </button>
+            <h1 class="kb-fullpage-title">知识库管理</h1>
+            <span class="kb-chunk-count" id="kbChunkCount"></span>
+          </div>
+          <div class="kb-fullpage-header-right">
+            <button class="small-btn" id="kbUploadBtn">+ 上传文档</button>
+            <button class="small-btn primary" id="kbAddChunkBtn">+ 手动添加</button>
+          </div>
+        </div>
+
+        <div class="kb-fullpage-body">
+          <!-- 左侧：侧边栏 -->
+          <div class="kb-sidebar">
+            <div class="kb-sidebar-section">
+              <div class="kb-sidebar-title">分组</div>
+              <div class="kb-group-list" id="kbGroupList">
+                <div class="kb-group-item active" data-group="">
+                  <span class="kb-group-icon">📁</span>
+                  <span class="kb-group-name">全部</span>
+                  <span class="kb-group-badge" id="kbGroupBadgeAll"></span>
+                </div>
+              </div>
+              <button class="kb-add-group-btn" id="kbAddGroupBtn">+ 新建分组</button>
+            </div>
+
+            <div class="kb-sidebar-section">
+              <div class="kb-sidebar-title">文件来源</div>
+              <div class="kb-file-list" id="kbFileList"></div>
+            </div>
+          </div>
+
+          <!-- 右侧：内容区域 -->
+          <div class="kb-main">
+            <div class="kb-main-toolbar">
+              <div class="kb-search-wrap">
+                <svg class="kb-search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="5"/><path d="M10.5 10.5L15 15"/></svg>
+                <input type="text" id="kbSearchInput" placeholder="搜索知识片段内容、文件名..." />
+              </div>
+              <div class="kb-view-toggle">
+                <button class="kb-view-btn active" id="kbViewList" title="列表视图">☰</button>
+                <button class="kb-view-btn" id="kbViewGrid" title="卡片视图">⊞</button>
+              </div>
+            </div>
+
+            <div class="kb-chunk-list" id="kbChunkList"></div>
+          </div>
+        </div>
+
+        <!-- 编辑抽屉 -->
+        <div class="kb-drawer-overlay hidden" id="kbDrawerOverlay"></div>
+        <div class="kb-drawer hidden" id="kbDrawer">
+          <div class="kb-drawer-header">
+            <h2 id="kbEditorTitle">编辑知识片段</h2>
+            <button class="kb-drawer-close" id="kbEditorClose">✕</button>
+          </div>
+          <div class="kb-drawer-body">
+            <div class="kb-field">
+              <label>分组</label>
+              <select id="kbEditorGroup"></select>
+            </div>
+            <div class="kb-field">
+              <label>来源文件名</label>
+              <input type="text" id="kbEditorFilename" />
+            </div>
+            <div class="kb-field kb-field-grow">
+              <label>内容</label>
+              <textarea id="kbEditorContent"></textarea>
+            </div>
+          </div>
+          <div class="kb-drawer-footer">
+            <button class="small-btn" id="kbEditorCancel">取消</button>
+            <button class="small-btn primary" id="kbEditorSave">保存</button>
           </div>
         </div>
       </div>

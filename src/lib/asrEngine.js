@@ -1,0 +1,221 @@
+import os from 'node:os';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import WebSocket from 'ws';
+import { startLocal, feedAudioLocal, stopLocal } from './localASR.js';
+
+// ============================================================
+// 豆包流式语音识别 - 二进制协议
+// ============================================================
+
+const DOUBAO_CONFIG = {
+  apiKey: process.env.DOUBAO_API_KEY,
+  resourceId: 'volc.seedasr.sauc.duration',
+  wsUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+};
+
+const PROTOCOL_VERSION = 0b0001;
+const HEADER_SIZE = 0b0001;
+const MSG_FULL_CLIENT_REQUEST = 0b0001;
+const MSG_AUDIO_ONLY = 0b0010;
+const MSG_FULL_SERVER_RESPONSE = 0b1001;
+const MSG_ERROR_RESPONSE = 0b1111;
+const FLAG_NONE = 0b0000;
+const FLAG_LAST_PACKET = 0b0010;
+const SERIAL_JSON = 0b0001;
+const SERIAL_NONE = 0b0000;
+const COMPRESS_GZIP = 0b0001;
+
+function buildHeader(msgType, msgFlags, serialization, compression) {
+  const byte0 = (PROTOCOL_VERSION << 4) | HEADER_SIZE;
+  const byte1 = (msgType << 4) | msgFlags;
+  const byte2 = (serialization << 4) | compression;
+  return Buffer.from([byte0, byte1, byte2, 0x00]);
+}
+
+function buildFullClientRequest(lang) {
+  const payload = {
+    user: { uid: 'electron-vtt', did: os.hostname(), platform: `${process.platform}-electron` },
+    audio: { format: 'pcm', codec: 'raw', rate: 16000, bits: 16, channel: 1 },
+    request: { model_name: 'bigmodel', enable_itn: true, enable_punc: true, enable_ddc: false, result_type: 'full' },
+  };
+
+  if (lang && lang !== 'auto') {
+    payload.audio.language = lang === 'zh' ? 'zh-CN' : lang === 'en' ? 'en-US' : undefined;
+  }
+
+  const jsonBuf = Buffer.from(JSON.stringify(payload), 'utf-8');
+  const compressed = zlib.gzipSync(jsonBuf);
+  const header = buildHeader(MSG_FULL_CLIENT_REQUEST, FLAG_NONE, SERIAL_JSON, COMPRESS_GZIP);
+  const sizeBuf = Buffer.alloc(4);
+  sizeBuf.writeUInt32BE(compressed.length, 0);
+  return Buffer.concat([header, sizeBuf, compressed]);
+}
+
+function buildAudioPacket(pcmBuffer, isLast) {
+  const flags = isLast ? FLAG_LAST_PACKET : FLAG_NONE;
+  const compressed = zlib.gzipSync(pcmBuffer);
+  const header = buildHeader(MSG_AUDIO_ONLY, flags, SERIAL_NONE, COMPRESS_GZIP);
+  const sizeBuf = Buffer.alloc(4);
+  sizeBuf.writeUInt32BE(compressed.length, 0);
+  return Buffer.concat([header, sizeBuf, compressed]);
+}
+
+function parseServerResponse(data) {
+  const buf = Buffer.from(data);
+  if (buf.length < 4) return null;
+
+  const byte1 = buf[1];
+  const msgType = (byte1 >> 4) & 0x0f;
+  const msgFlags = byte1 & 0x0f;
+  const byte2 = buf[2];
+  const compression = byte2 & 0x0f;
+
+  if (msgType === MSG_ERROR_RESPONSE) {
+    const errorCode = buf.readUInt32BE(4);
+    const msgSize = buf.readUInt32BE(8);
+    const errorMsg = buf.subarray(12, 12 + msgSize).toString('utf-8');
+    return { type: 'error', code: errorCode, message: errorMsg };
+  }
+
+  if (msgType === MSG_FULL_SERVER_RESPONSE) {
+    const isLast = (msgFlags & 0b0010) !== 0;
+    const hasSequence = (msgFlags & 0b0001) !== 0;
+    let offset = 4;
+    if (hasSequence) offset += 4;
+    const payloadSize = buf.readUInt32BE(offset);
+    offset += 4;
+    let payloadBuf = buf.subarray(offset, offset + payloadSize);
+    if (compression === COMPRESS_GZIP) payloadBuf = zlib.gunzipSync(payloadBuf);
+    const payload = JSON.parse(payloadBuf.toString('utf-8'));
+    return { type: 'result', isLast, payload };
+  }
+
+  return null;
+}
+
+// ============================================================
+// 豆包引擎
+// ============================================================
+
+let wsConnection = null;
+let doubaoChunkCount = 0;
+
+function startDoubao(lang, onResult, onError) {
+  return new Promise((resolve, reject) => {
+    const connectId = crypto.randomUUID();
+    const ws = new WebSocket(DOUBAO_CONFIG.wsUrl, {
+      headers: {
+        'X-Api-Key': DOUBAO_CONFIG.apiKey,
+        'X-Api-Resource-Id': DOUBAO_CONFIG.resourceId,
+        'X-Api-Connect-Id': connectId,
+      },
+    });
+    ws.binaryType = 'arraybuffer';
+
+    ws.on('open', () => {
+      console.log('[DOUBAO] WebSocket connected');
+      ws.send(buildFullClientRequest(lang));
+      wsConnection = ws;
+      doubaoChunkCount = 0;
+      resolve();
+    });
+
+    ws.on('message', (data) => {
+      const parsed = parseServerResponse(data);
+      if (!parsed) return;
+
+      if (parsed.type === 'error') {
+        onError?.(`豆包 ASR 错误 [${parsed.code}]: ${parsed.message}`);
+        return;
+      }
+
+      if (parsed.type === 'result') {
+        const result = parsed.payload?.result;
+        if (result) {
+          onResult?.({
+            text: result.text || '',
+            utterances: result.utterances || [],
+            isLast: parsed.isLast,
+          });
+        }
+      }
+    });
+
+    ws.on('unexpected-response', (_req, res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk.toString(); });
+      res.on('end', () => {
+        const msg = `WebSocket 握手失败 [${res.statusCode}]: ${body}`;
+        console.error(msg);
+        onError?.(msg);
+        wsConnection = null;
+        reject(new Error(msg));
+      });
+    });
+
+    ws.on('error', (err) => {
+      onError?.(`WebSocket 错误: ${err.message}`);
+      wsConnection = null;
+      reject(err);
+    });
+
+    ws.on('close', () => { wsConnection = null; });
+  });
+}
+
+function feedAudioDoubao(pcmDataInt16, isLast) {
+  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+  const int16 = Int16Array.from(pcmDataInt16);
+  const pcmBuffer = Buffer.from(int16.buffer);
+  if (doubaoChunkCount % 20 === 0) {
+    console.log(`[DOUBAO] Sending chunk #${doubaoChunkCount}, bytes: ${pcmBuffer.length}, isLast: ${isLast}`);
+  }
+  doubaoChunkCount++;
+  wsConnection.send(buildAudioPacket(pcmBuffer, isLast));
+}
+
+function stopDoubao() {
+  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+  wsConnection.send(buildAudioPacket(Buffer.alloc(0), true));
+  setTimeout(() => {
+    if (wsConnection) {
+      wsConnection.close();
+      wsConnection = null;
+    }
+  }, 2000);
+}
+
+// ============================================================
+// ASR 引擎分发
+// ============================================================
+
+let currentEngine = 'doubao';
+
+export async function startASR(settings, onResult, onError) {
+  currentEngine = settings.asrEngine || 'doubao';
+  console.log(`[ASR] Starting engine: ${currentEngine}`);
+
+  if (currentEngine === 'local') {
+    startLocal(settings.lang, onResult, onError);
+  } else {
+    await startDoubao(settings.lang, onResult, onError);
+  }
+}
+
+export function feedAudio(pcmData, isLast) {
+  if (currentEngine === 'local') {
+    feedAudioLocal(pcmData, isLast);
+  } else {
+    feedAudioDoubao(pcmData, isLast);
+  }
+}
+
+export function stopASR() {
+  console.log(`[ASR] Stopping engine: ${currentEngine}`);
+  if (currentEngine === 'local') {
+    stopLocal();
+  } else {
+    stopDoubao();
+  }
+}

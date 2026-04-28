@@ -2,6 +2,7 @@ import { streamChat, queryChat } from './gemini.js';
 import { safePdfParse } from './safePdfParse.js';
 import { pineconeService } from './pineconeService.js';
 import { generateEmbedding } from './gemini.js';
+import crypto from 'node:crypto';
 
 class ResumeAnalyzer {
   async process(buffer, filename, send) {
@@ -131,13 +132,28 @@ class ResumeAnalyzer {
   }
 
   async storeKnowledge(filename, docs, send) {
+    // 先删除同名文件的旧知识文档
+    pineconeService.documents = pineconeService.documents.filter(
+      d => !(d.filename === filename && d.type === 'knowledge')
+    );
+
     for (let i = 0; i < docs.length; i++) {
       try {
         const doc = docs[i];
         const textForEmbedding = `${doc.topic}: ${doc.content}`;
-        const embedding = await generateEmbedding(textForEmbedding);
+        let embedding = [];
+        try {
+          embedding = await generateEmbedding(textForEmbedding);
+        } catch (embErr) {
+          console.error(`[ResumeAnalyzer] Embedding failed for "${doc.topic}":`, embErr.message);
+        }
 
         pineconeService.documents.push({
+          id: crypto.randomUUID(),
+          group: '',
+          sourceType: 'pdf',
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
           filename,
           type: 'knowledge',
           techPoint: doc.topic,
@@ -160,6 +176,7 @@ class ResumeAnalyzer {
     }
 
     pineconeService.save();
+    console.log(`[ResumeAnalyzer] Stored ${docs.length} knowledge docs for ${filename}`);
   }
 }
 

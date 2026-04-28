@@ -2,11 +2,9 @@ import { app, BrowserWindow, ipcMain, session, desktopCapturer } from 'electron'
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { config as dotenvConfig } from 'dotenv';
 import started from 'electron-squirrel-startup';
-import WebSocket from 'ws';
 
 dotenvConfig({ path: path.join(app.getAppPath(), '.env') });
 
@@ -77,229 +75,10 @@ app.on('window-all-closed', () => {
 });
 
 // ============================================================
-// 豆包流式语音识别 - 二进制协议实现
+// ASR 引擎（豆包云端 + sherpa-onnx 本地）
 // ============================================================
-
-const DOUBAO_CONFIG = {
-  apiKey: process.env.DOUBAO_API_KEY,
-  resourceId: 'volc.seedasr.sauc.duration',
-  wsUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
-};
-
-console.log('[DOUBAO] apiKey loaded:', DOUBAO_CONFIG.apiKey ? `${DOUBAO_CONFIG.apiKey.substring(0, 8)}...` : 'EMPTY');
-
-// 协议常量
-const PROTOCOL_VERSION = 0b0001;
-const HEADER_SIZE = 0b0001;
-const MSG_FULL_CLIENT_REQUEST = 0b0001;
-const MSG_AUDIO_ONLY = 0b0010;
-const MSG_FULL_SERVER_RESPONSE = 0b1001;
-const MSG_ERROR_RESPONSE = 0b1111;
-const FLAG_NONE = 0b0000;
-const FLAG_LAST_PACKET = 0b0010;
-const SERIAL_JSON = 0b0001;
-const SERIAL_NONE = 0b0000;
-const COMPRESS_GZIP = 0b0001;
-const COMPRESS_NONE = 0b0000;
-
-function buildHeader(msgType, msgFlags, serialization, compression) {
-  const byte0 = (PROTOCOL_VERSION << 4) | HEADER_SIZE;
-  const byte1 = (msgType << 4) | msgFlags;
-  const byte2 = (serialization << 4) | compression;
-  const byte3 = 0x00;
-  return Buffer.from([byte0, byte1, byte2, byte3]);
-}
-
-function buildFullClientRequest(lang) {
-  const payload = {
-    user: {
-      uid: 'electron-vtt',
-      did: os.hostname(),
-      platform: `${process.platform}-electron`,
-    },
-    audio: {
-      format: 'pcm',
-      codec: 'raw',
-      rate: 16000,
-      bits: 16,
-      channel: 1,
-    },
-    request: {
-      model_name: 'bigmodel',
-      enable_itn: true,
-      enable_punc: true,
-      enable_ddc: false,
-      result_type: 'full',
-    },
-  };
-
-  if (lang && lang !== 'auto') {
-    payload.audio.language = lang === 'zh' ? 'zh-CN' : lang === 'en' ? 'en-US' : undefined;
-  }
-
-  const jsonBuf = Buffer.from(JSON.stringify(payload), 'utf-8');
-  const compressed = zlib.gzipSync(jsonBuf);
-
-  const header = buildHeader(MSG_FULL_CLIENT_REQUEST, FLAG_NONE, SERIAL_JSON, COMPRESS_GZIP);
-  const sizeBuf = Buffer.alloc(4);
-  sizeBuf.writeUInt32BE(compressed.length, 0);
-
-  return Buffer.concat([header, sizeBuf, compressed]);
-}
-
-function buildAudioPacket(pcmBuffer, isLast) {
-  const flags = isLast ? FLAG_LAST_PACKET : FLAG_NONE;
-  const compressed = zlib.gzipSync(pcmBuffer);
-
-  const header = buildHeader(MSG_AUDIO_ONLY, flags, SERIAL_NONE, COMPRESS_GZIP);
-  const sizeBuf = Buffer.alloc(4);
-  sizeBuf.writeUInt32BE(compressed.length, 0);
-
-  return Buffer.concat([header, sizeBuf, compressed]);
-}
-
-function parseServerResponse(data) {
-  const buf = Buffer.from(data);
-  if (buf.length < 4) return null;
-
-  const byte1 = buf[1];
-  const msgType = (byte1 >> 4) & 0x0f;
-  const msgFlags = byte1 & 0x0f;
-  const byte2 = buf[2];
-  const compression = byte2 & 0x0f;
-
-  if (msgType === MSG_ERROR_RESPONSE) {
-    const errorCode = buf.readUInt32BE(4);
-    const msgSize = buf.readUInt32BE(8);
-    const errorMsg = buf.subarray(12, 12 + msgSize).toString('utf-8');
-    return { type: 'error', code: errorCode, message: errorMsg };
-  }
-
-  if (msgType === MSG_FULL_SERVER_RESPONSE) {
-    const isLast = (msgFlags & 0b0010) !== 0;
-    const hasSequence = (msgFlags & 0b0001) !== 0;
-
-    let offset = 4;
-    if (hasSequence) {
-      offset += 4; // skip sequence number
-    }
-
-    const payloadSize = buf.readUInt32BE(offset);
-    offset += 4;
-    let payloadBuf = buf.subarray(offset, offset + payloadSize);
-
-    if (compression === COMPRESS_GZIP) {
-      payloadBuf = zlib.gunzipSync(payloadBuf);
-    }
-
-    const payload = JSON.parse(payloadBuf.toString('utf-8'));
-    return { type: 'result', isLast, payload };
-  }
-
-  return null;
-}
-
-// WebSocket 连接管理
-let wsConnection = null;
-
-function startDoubaoStream(lang) {
-  return new Promise((resolve, reject) => {
-    const connectId = crypto.randomUUID();
-
-    const ws = new WebSocket(DOUBAO_CONFIG.wsUrl, {
-      headers: {
-        'X-Api-Key': DOUBAO_CONFIG.apiKey,
-        'X-Api-Resource-Id': DOUBAO_CONFIG.resourceId,
-        'X-Api-Connect-Id': connectId,
-      },
-    });
-
-    ws.binaryType = 'arraybuffer';
-
-    ws.on('open', () => {
-      console.log('[DOUBAO] WebSocket connected, sending full client request');
-      const fullClientRequest = buildFullClientRequest(lang);
-      ws.send(fullClientRequest);
-      wsConnection = ws;
-      resolve();
-    });
-
-    ws.on('message', (data) => {
-      console.log('[DOUBAO] Received message, size:', Buffer.from(data).length);
-      const parsed = parseServerResponse(data);
-      if (!parsed) {
-        console.log('[DOUBAO] Could not parse response');
-        return;
-      }
-      console.log('[DOUBAO] Parsed type:', parsed.type, parsed.type === 'result' ? JSON.stringify(parsed.payload).substring(0, 200) : '');
-
-      if (parsed.type === 'error') {
-        mainWindow?.webContents.send('stream-error', `豆包 ASR 错误 [${parsed.code}]: ${parsed.message}`);
-        return;
-      }
-
-      if (parsed.type === 'result') {
-        const result = parsed.payload?.result;
-        if (result) {
-          console.log('[DOUBAO] utterances:', JSON.stringify(result.utterances?.map(u => ({ text: u.text?.substring(0, 30), definite: u.definite }))));
-          mainWindow?.webContents.send('stream-result', {
-            text: result.text || '',
-            utterances: result.utterances || [],
-            isLast: parsed.isLast,
-          });
-        }
-      }
-    });
-
-    ws.on('unexpected-response', (_req, res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk.toString(); });
-      res.on('end', () => {
-        const msg = `WebSocket 握手失败 [${res.statusCode}]: ${body}`;
-        console.error(msg);
-        mainWindow?.webContents.send('stream-error', msg);
-        wsConnection = null;
-        reject(new Error(msg));
-      });
-    });
-
-    ws.on('error', (err) => {
-      mainWindow?.webContents.send('stream-error', `WebSocket 错误: ${err.message}`);
-      wsConnection = null;
-      reject(err);
-    });
-
-    ws.on('close', () => {
-      wsConnection = null;
-    });
-  });
-}
-
-let chunkCount = 0;
-
-function sendAudioChunk(pcmData, isLast) {
-  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
-  const int16 = Int16Array.from(pcmData);
-  const pcmBuffer = Buffer.from(int16.buffer);
-  if (chunkCount % 20 === 0) {
-    console.log(`[DOUBAO] Sending chunk #${chunkCount}, pcm bytes: ${pcmBuffer.length}, isLast: ${isLast}`);
-  }
-  chunkCount++;
-  const packet = buildAudioPacket(pcmBuffer, isLast);
-  wsConnection.send(packet);
-}
-
-function stopDoubaoStream() {
-  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
-  const emptyPacket = buildAudioPacket(Buffer.alloc(0), true);
-  wsConnection.send(emptyPacket);
-  setTimeout(() => {
-    if (wsConnection) {
-      wsConnection.close();
-      wsConnection = null;
-    }
-  }, 2000);
-}
+import { startASR, feedAudio, stopASR } from './lib/asrEngine.js';
+import { checkModel, downloadModel } from './lib/modelDownloader.js';
 
 // ============================================================
 // IPC Handlers
@@ -320,7 +99,9 @@ ipcMain.handle('disable-loopback-audio', () => {
 
 ipcMain.handle('start-doubao-stream', async (_event, settings) => {
   try {
-    await startDoubaoStream(settings.lang);
+    const onResult = (result) => mainWindow?.webContents.send('stream-result', result);
+    const onError = (msg) => mainWindow?.webContents.send('stream-error', msg);
+    await startASR(settings, onResult, onError);
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
@@ -329,7 +110,7 @@ ipcMain.handle('start-doubao-stream', async (_event, settings) => {
 
 ipcMain.handle('send-audio-chunk', async (_event, pcmData, isLast) => {
   try {
-    sendAudioChunk(pcmData, isLast);
+    feedAudio(pcmData, isLast);
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
@@ -338,8 +119,23 @@ ipcMain.handle('send-audio-chunk', async (_event, pcmData, isLast) => {
 
 ipcMain.handle('stop-doubao-stream', async () => {
   try {
-    stopDoubaoStream();
+    stopASR();
     return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('check-local-model', () => {
+  return checkModel();
+});
+
+ipcMain.handle('download-local-model', async () => {
+  try {
+    const result = await downloadModel((progress) => {
+      mainWindow?.webContents.send('model-download-progress', progress);
+    });
+    return { success: true, ...result };
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -476,9 +272,13 @@ ipcMain.handle('ai-completion', async (_event, { text, mode, background }) => {
       ]);
       mainWindow?.webContents.send('ai-stream-end', { citations: [] });
     } else {
-      const ragResponse = await ragOrchestrator.processTranscript(text, background);
+      const ragResponse = await ragOrchestrator.processTranscript(text, background, { debug: true });
       const extractedQ = ragResponse.extractedQuestion?.question || text;
       mainWindow?.webContents.send('ai-question', extractedQ);
+
+      if (ragResponse.debugTrace) {
+        mainWindow?.webContents.send('rag-debug', ragResponse.debugTrace);
+      }
 
       if (ragResponse.searchPerformed && ragResponse.context.combinedContext) {
         await streamToRenderer([
@@ -507,13 +307,26 @@ ipcMain.handle('upload-pdf', async () => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
-      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      filters: [
+        { name: '文档', extensions: ['pdf', 'md'] },
+        { name: 'PDF', extensions: ['pdf'] },
+        { name: 'Markdown', extensions: ['md'] },
+      ],
     });
 
     if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
 
     const filePath = result.filePaths[0];
     const filename = path.basename(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+
+    if (ext === '.md') {
+      const text = fs.readFileSync(filePath, 'utf-8');
+      const mdResult = await pineconeService.uploadMarkdown(text, filename);
+      if (!mdResult) return { success: false, error: 'Markdown upload failed' };
+      return { success: true, filename, title: mdResult.title, chunks: mdResult.chunks };
+    }
+
     const buffer = fs.readFileSync(filePath);
 
     const send = (type, data) => {
@@ -542,4 +355,78 @@ ipcMain.handle('delete-pdf', async (_event, filename) => {
 ipcMain.handle('list-pdfs', async () => {
   const pdfs = pineconeService.getUploadedFiles();
   return { success: true, pdfs };
+});
+
+// --- 知识库管理 IPC ---
+
+ipcMain.handle('list-chunks', async (_event, filters) => {
+  try {
+    const chunks = pineconeService.getChunks(filters || {});
+    return { success: true, chunks };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-chunk', async (_event, id) => {
+  try {
+    const chunk = pineconeService.getChunkById(id);
+    return chunk ? { success: true, chunk } : { success: false, error: 'Not found' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('update-chunk', async (_event, { id, updates }) => {
+  try {
+    const chunk = await pineconeService.updateChunk(id, updates);
+    return chunk ? { success: true, chunk } : { success: false, error: 'Not found' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('delete-chunk', async (_event, id) => {
+  try {
+    const deleted = pineconeService.deleteChunk(id);
+    return { success: true, deleted };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('add-chunk', async (_event, data) => {
+  try {
+    const chunk = await pineconeService.addChunk(data);
+    return { success: true, chunk };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('list-groups', async () => {
+  try {
+    const groups = pineconeService.getGroups();
+    return { success: true, groups };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('save-groups', async (_event, groups) => {
+  try {
+    pineconeService.saveGroups(groups);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('set-document-group', async (_event, { filename, group }) => {
+  try {
+    const count = pineconeService.setDocumentGroup(filename, group);
+    return { success: true, count };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });

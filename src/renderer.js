@@ -37,6 +37,46 @@ const interviewerResponse = document.getElementById('interviewerResponse')
 const historyList = document.getElementById('historyList')
 const clearHistoryBtn = document.getElementById('clearHistoryBtn')
 
+// KB Management
+const manageKBBtn = document.getElementById('manageKBBtn')
+const kbFullpage = document.getElementById('kbFullpage')
+const kbBackBtn = document.getElementById('kbBackBtn')
+const kbGroupList = document.getElementById('kbGroupList')
+const kbAddGroupBtn = document.getElementById('kbAddGroupBtn')
+const kbFileList = document.getElementById('kbFileList')
+const kbSearchInput = document.getElementById('kbSearchInput')
+const kbChunkList = document.getElementById('kbChunkList')
+const kbChunkCount = document.getElementById('kbChunkCount')
+const kbAddChunkBtn = document.getElementById('kbAddChunkBtn')
+const kbUploadBtn = document.getElementById('kbUploadBtn')
+const kbViewList = document.getElementById('kbViewList')
+const kbViewGrid = document.getElementById('kbViewGrid')
+const kbDrawer = document.getElementById('kbDrawer')
+const kbDrawerOverlay = document.getElementById('kbDrawerOverlay')
+const kbEditorTitle = document.getElementById('kbEditorTitle')
+const kbEditorClose = document.getElementById('kbEditorClose')
+const kbEditorGroup = document.getElementById('kbEditorGroup')
+const kbEditorFilename = document.getElementById('kbEditorFilename')
+const kbEditorContent = document.getElementById('kbEditorContent')
+const kbEditorCancel = document.getElementById('kbEditorCancel')
+const kbEditorSave = document.getElementById('kbEditorSave')
+const pdfSection = document.querySelector('.pdf-section')
+
+// ASR 引擎设置
+const asrEngineSelect = document.getElementById('asrEngineSelect')
+const modelStatusItem = document.getElementById('modelStatusItem')
+const modelStatusIcon = document.getElementById('modelStatusIcon')
+const modelStatusText = document.getElementById('modelStatusText')
+const downloadModelBtn = document.getElementById('downloadModelBtn')
+const modelProgress = document.getElementById('modelProgress')
+const modelProgressFill = document.getElementById('modelProgressFill')
+const modelProgressText = document.getElementById('modelProgressText')
+
+// RAG Debug
+const ragDebugPanel = document.getElementById('ragDebugPanel')
+const ragDebugToggle = document.getElementById('ragDebugToggle')
+const ragDebugContent = document.getElementById('ragDebugContent')
+
 let isRecording = false
 let mediaStream = null
 let systemAudioStream = null
@@ -156,15 +196,77 @@ function loadSettings() {
   if (saved) {
     const s = JSON.parse(saved)
     langSelect.value = s.lang || 'zh'
+    if (s.asrEngine) asrEngineSelect.value = s.asrEngine
   }
   systemAudioToggle.checked = captureSystemAudio
+  handleAsrEngineChange()
 }
 
 function saveSettings() {
-  localStorage.setItem('vtt-settings', JSON.stringify({ lang: langSelect.value }))
+  localStorage.setItem('vtt-settings', JSON.stringify({ lang: langSelect.value, asrEngine: asrEngineSelect.value }))
 }
 
 langSelect.addEventListener('change', saveSettings)
+
+asrEngineSelect.addEventListener('change', () => {
+  saveSettings()
+  handleAsrEngineChange()
+})
+
+async function handleAsrEngineChange() {
+  if (asrEngineSelect.value === 'local') {
+    modelStatusItem.classList.remove('hidden')
+    modelStatusIcon.textContent = '⏳'
+    modelStatusText.textContent = '检测模型中...'
+    downloadModelBtn.style.display = 'none'
+    modelProgress.classList.add('hidden')
+    try {
+      const result = await window.electronAPI.checkLocalModel()
+      if (result.available) {
+        modelStatusIcon.textContent = '✅'
+        modelStatusText.textContent = '模型已就绪'
+        downloadModelBtn.style.display = 'none'
+      } else {
+        modelStatusIcon.textContent = '⚠️'
+        modelStatusText.textContent = '模型未下载（约 230MB）'
+        downloadModelBtn.style.display = ''
+      }
+    } catch (e) {
+      modelStatusIcon.textContent = '❌'
+      modelStatusText.textContent = '检测失败: ' + e.message
+    }
+  } else {
+    modelStatusItem.classList.add('hidden')
+  }
+}
+
+downloadModelBtn.addEventListener('click', async () => {
+  downloadModelBtn.style.display = 'none'
+  modelProgress.classList.remove('hidden')
+  modelStatusIcon.textContent = '⬇️'
+  modelStatusText.textContent = '下载中...'
+
+  const result = await window.electronAPI.downloadLocalModel()
+  if (result.success) {
+    modelStatusIcon.textContent = '✅'
+    modelStatusText.textContent = '模型已就绪'
+    modelProgress.classList.add('hidden')
+  } else {
+    modelStatusIcon.textContent = '❌'
+    modelStatusText.textContent = '下载失败: ' + result.error
+    downloadModelBtn.style.display = ''
+    modelProgress.classList.add('hidden')
+  }
+})
+
+window.electronAPI.onModelDownloadProgress((progress) => {
+  modelProgressFill.style.width = progress.percent + '%'
+  modelProgressText.textContent = progress.message || (progress.percent + '%')
+  if (progress.stage === 'extract') {
+    modelStatusIcon.textContent = '📦'
+    modelStatusText.textContent = '解压中...'
+  }
+})
 
 systemAudioToggle.addEventListener('change', () => {
   captureSystemAudio = systemAudioToggle.checked
@@ -286,7 +388,7 @@ async function stopRecording() {
 
 // --- 豆包流式识别 ---
 async function startDoubaoStreaming() {
-  const result = await window.electronAPI.startStream({ lang: langSelect.value })
+  const result = await window.electronAPI.startStream({ lang: langSelect.value, asrEngine: asrEngineSelect.value })
   if (!result.success) throw new Error(result.error)
 
   audioContext = new AudioContext({ sampleRate: 16000 })
@@ -396,6 +498,8 @@ async function requestAICompletion(text) {
   aiQuestion.classList.remove('visible')
   aiCitations.innerHTML = ''
   aiStreamText = ''
+  ragDebugPanel.classList.add('hidden')
+  ragDebugContent.innerHTML = ''
 
   const mode = currentMode === 'candidate' ? 'copilot' : 'interviewer-evaluate'
   const background = currentMode === 'interviewer' ? jdInput.value : ''
@@ -646,6 +750,10 @@ clearTranscriptBtn.addEventListener('click', () => {
 
 // --- 快捷键 ---
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!kbDrawer.classList.contains('hidden')) { closeKBDrawer(); return }
+    if (!kbFullpage.classList.contains('hidden')) { kbFullpage.classList.add('hidden'); return }
+  }
   if (e.ctrlKey && e.key === 'Enter') {
     e.preventDefault()
     const text = getSelectedText()
@@ -656,6 +764,345 @@ document.addEventListener('keydown', (e) => {
     switchMode(currentMode === 'candidate' ? 'interviewer' : 'candidate')
   }
 })
+
+// --- 知识库管理（全屏页面） ---
+let kbGroups = []
+let kbActiveGroup = ''
+let kbActiveFile = ''
+let kbEditingChunkId = null
+let kbViewMode = 'list'
+
+manageKBBtn.addEventListener('click', () => {
+  kbFullpage.classList.remove('hidden')
+  loadKBData()
+})
+
+kbBackBtn.addEventListener('click', () => {
+  kbFullpage.classList.add('hidden')
+  closeKBDrawer()
+})
+
+kbUploadBtn.addEventListener('click', async () => {
+  const result = await window.electronAPI.uploadPDF()
+  if (result.success) {
+    loadKBData()
+    refreshPDFList()
+  }
+})
+
+kbViewList.addEventListener('click', () => {
+  kbViewMode = 'list'
+  kbViewList.classList.add('active')
+  kbViewGrid.classList.remove('active')
+  kbChunkList.classList.remove('grid')
+})
+
+kbViewGrid.addEventListener('click', () => {
+  kbViewMode = 'grid'
+  kbViewGrid.classList.add('active')
+  kbViewList.classList.remove('active')
+  kbChunkList.classList.add('grid')
+})
+
+async function loadKBData() {
+  await Promise.all([loadKBGroups(), loadKBFiles(), loadKBChunks()])
+}
+
+async function loadKBGroups() {
+  const result = await window.electronAPI.listGroups()
+  kbGroups = result.success ? result.groups : []
+  renderKBSidebarGroups()
+}
+
+async function loadKBFiles() {
+  const result = await window.electronAPI.listPDFs()
+  if (!result.success) return
+  kbFileList.innerHTML = ''
+  for (const pdf of result.pdfs) {
+    const div = document.createElement('div')
+    div.className = `kb-file-item${kbActiveFile === pdf.filename ? ' active' : ''}`
+    div.innerHTML = `
+      <span class="kb-file-icon">📄</span>
+      <span class="kb-file-name">${pdf.filename}</span>
+      <span class="kb-file-badge">${pdf.chunks}</span>
+    `
+    div.addEventListener('click', () => {
+      kbActiveFile = kbActiveFile === pdf.filename ? '' : pdf.filename
+      loadKBFiles()
+      loadKBChunks()
+    })
+    kbFileList.appendChild(div)
+  }
+}
+
+function renderKBSidebarGroups() {
+  kbGroupList.innerHTML = ''
+
+  const allItem = document.createElement('div')
+  allItem.className = `kb-group-item${kbActiveGroup === '' ? ' active' : ''}`
+  allItem.innerHTML = `<span class="kb-group-icon">📁</span><span class="kb-group-name">全部</span>`
+  allItem.addEventListener('click', () => { kbActiveGroup = ''; renderKBSidebarGroups(); loadKBChunks() })
+  kbGroupList.appendChild(allItem)
+
+  for (const g of kbGroups) {
+    const item = document.createElement('div')
+    item.className = `kb-group-item${kbActiveGroup === g.name ? ' active' : ''}`
+    item.innerHTML = `<span class="kb-group-icon">📂</span><span class="kb-group-name">${g.name}</span>`
+    item.addEventListener('click', () => { kbActiveGroup = g.name; renderKBSidebarGroups(); loadKBChunks() })
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      if (confirm(`删除分组「${g.name}」？（不会删除知识片段）`)) {
+        kbGroups = kbGroups.filter(x => x.name !== g.name)
+        window.electronAPI.saveGroups(kbGroups)
+        if (kbActiveGroup === g.name) kbActiveGroup = ''
+        renderKBSidebarGroups()
+      }
+    })
+    kbGroupList.appendChild(item)
+  }
+}
+
+kbAddGroupBtn.addEventListener('click', () => {
+  const name = prompt('输入分组名称：')
+  if (!name || !name.trim()) return
+  if (kbGroups.some(g => g.name === name.trim())) return
+  kbGroups.push({ name: name.trim() })
+  window.electronAPI.saveGroups(kbGroups)
+  renderKBSidebarGroups()
+})
+
+let kbSearchTimer = null
+kbSearchInput.addEventListener('input', () => {
+  clearTimeout(kbSearchTimer)
+  kbSearchTimer = setTimeout(() => loadKBChunks(), 300)
+})
+
+async function loadKBChunks() {
+  const filters = {}
+  if (kbActiveGroup) filters.group = kbActiveGroup
+  if (kbActiveFile) filters.filename = kbActiveFile
+  const searchText = kbSearchInput.value.trim()
+  if (searchText) filters.searchText = searchText
+
+  const result = await window.electronAPI.listChunks(filters)
+  if (!result.success) return
+
+  const chunks = result.chunks
+  kbChunkCount.textContent = `${chunks.length} 条知识片段`
+
+  kbChunkList.innerHTML = ''
+  if (chunks.length === 0) {
+    kbChunkList.innerHTML = `
+      <div class="kb-empty">
+        <div class="kb-empty-icon">📚</div>
+        <div class="kb-empty-text">还没有知识片段</div>
+        <div class="kb-empty-hint">上传 PDF 或 Markdown 文档，或手动添加知识</div>
+      </div>
+    `
+    return
+  }
+
+  for (const chunk of chunks) {
+    const div = document.createElement('div')
+    div.className = 'kb-chunk-item'
+
+    const typeClass = chunk.sourceType || 'pdf'
+    const typeLabel = typeClass === 'manual' ? '手动' : typeClass === 'markdown' ? 'MD' : 'PDF'
+    const groupTag = chunk.group ? `<span class="kb-chunk-tag group">${chunk.group}</span>` : ''
+    const time = chunk.updatedAt ? new Date(chunk.updatedAt).toLocaleDateString() : ''
+
+    div.innerHTML = `
+      <div class="kb-chunk-header">
+        <span class="kb-chunk-filename">${chunk.filename || ''}</span>
+        <span class="kb-chunk-tag ${typeClass}">${typeLabel}</span>
+        ${groupTag}
+      </div>
+      <div class="kb-chunk-content">${chunk.content.substring(0, 300)}</div>
+      <div class="kb-chunk-meta">
+        <span class="kb-chunk-time">${time}</span>
+        <div class="kb-chunk-actions">
+          <button class="small-btn" data-action="edit">编辑</button>
+          <button class="small-btn danger" data-action="delete">删除</button>
+        </div>
+      </div>
+    `
+
+    div.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+      e.stopPropagation()
+      openKBDrawer(chunk)
+    })
+    div.querySelector('[data-action="delete"]').addEventListener('click', async (e) => {
+      e.stopPropagation()
+      if (!confirm('确认删除这条知识片段？')) return
+      await window.electronAPI.deleteChunk(chunk.id)
+      loadKBChunks()
+    })
+
+    kbChunkList.appendChild(div)
+  }
+}
+
+function openKBDrawer(chunk) {
+  kbEditingChunkId = chunk ? chunk.id : null
+  kbEditorTitle.textContent = chunk ? '编辑知识片段' : '添加知识片段'
+  kbEditorContent.value = chunk ? chunk.content : ''
+  kbEditorFilename.value = chunk ? (chunk.filename || '') : '手动添加'
+  kbEditorFilename.disabled = !!chunk
+
+  kbEditorGroup.innerHTML = '<option value="">无分组</option>'
+  for (const g of kbGroups) {
+    const opt = document.createElement('option')
+    opt.value = g.name
+    opt.textContent = g.name
+    kbEditorGroup.appendChild(opt)
+  }
+  kbEditorGroup.value = chunk ? (chunk.group || '') : kbActiveGroup
+
+  kbDrawer.classList.remove('hidden')
+  kbDrawerOverlay.classList.remove('hidden')
+}
+
+function closeKBDrawer() {
+  kbDrawer.classList.add('hidden')
+  kbDrawerOverlay.classList.add('hidden')
+}
+
+kbAddChunkBtn.addEventListener('click', () => openKBDrawer(null))
+kbEditorClose.addEventListener('click', closeKBDrawer)
+kbEditorCancel.addEventListener('click', closeKBDrawer)
+kbDrawerOverlay.addEventListener('click', closeKBDrawer)
+
+kbEditorSave.addEventListener('click', async () => {
+  const content = kbEditorContent.value.trim()
+  if (!content) return
+
+  kbEditorSave.disabled = true
+  kbEditorSave.textContent = '保存中...'
+
+  try {
+    if (kbEditingChunkId) {
+      await window.electronAPI.updateChunk(kbEditingChunkId, {
+        content,
+        group: kbEditorGroup.value,
+      })
+    } else {
+      await window.electronAPI.addChunk({
+        content,
+        group: kbEditorGroup.value,
+        filename: kbEditorFilename.value || '手动添加',
+        sourceType: 'manual',
+      })
+    }
+    closeKBDrawer()
+    loadKBChunks()
+    refreshPDFList()
+  } catch (err) {
+    alert('保存失败: ' + err.message)
+  } finally {
+    kbEditorSave.disabled = false
+    kbEditorSave.textContent = '保存'
+  }
+})
+
+// --- RAG 调试面板 ---
+ragDebugToggle.addEventListener('click', () => {
+  ragDebugContent.classList.toggle('hidden')
+  ragDebugToggle.querySelector('.debug-arrow').classList.toggle('open')
+})
+
+window.electronAPI.onRAGDebug((trace) => {
+  ragDebugPanel.classList.remove('hidden')
+  renderRAGDebug(trace)
+})
+
+function renderRAGDebug(trace) {
+  let html = ''
+
+  // 问题提取
+  html += '<div class="debug-step">'
+  html += '<div class="debug-step-label">问题提取</div>'
+  if (trace.extractedQuestion) {
+    html += `<div class="debug-step-value">${trace.extractedQuestion.question}<br><span style="color:#666">置信度: ${Math.round(trace.extractedQuestion.confidence * 100)}% · 方式: ${trace.extractedQuestion.method}</span></div>`
+  } else {
+    html += '<div class="debug-step-value" style="color:#666">未提取到问题</div>'
+  }
+  html += '</div>'
+
+  // 搜索查询
+  html += '<div class="debug-step">'
+  html += '<div class="debug-step-label">搜索查询</div>'
+  html += `<div class="debug-step-value">${trace.searchQuery || '无'}</div>`
+  html += '</div>'
+
+  // 知识检索结果
+  if (trace.pdfResults && trace.pdfResults.length > 0) {
+    html += '<div class="debug-step">'
+    html += '<div class="debug-step-label">知识库检索</div>'
+    for (const r of trace.pdfResults) {
+      const pct = Math.round((r.score || 0) * 100)
+      html += `<div class="debug-result-item">
+        <div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div>
+        <div class="debug-result-meta">
+          <span>${r.filename || ''}</span>
+          ${r.group ? `<span class="kb-chunk-tag">${r.group}</span>` : ''}
+          <span style="color:#4a9eff">${pct}%</span>
+          ${r.page ? `<span>P${r.page}</span>` : ''}
+        </div>
+        <div class="debug-result-content">${r.content || ''}</div>
+      </div>`
+    }
+    html += '</div>'
+  }
+
+  // Web 检索结果
+  if (trace.webResults && trace.webResults.length > 0) {
+    html += '<div class="debug-step">'
+    html += '<div class="debug-step-label">Web 检索</div>'
+    for (const r of trace.webResults) {
+      html += `<div class="debug-result-item">
+        <div class="debug-result-meta"><span>${r.link || ''}</span></div>
+        <div class="debug-result-content">${r.content || ''}</div>
+      </div>`
+    }
+    html += '</div>'
+  }
+
+  // 排序结果
+  if (trace.rankedResults && trace.rankedResults.length > 0) {
+    html += '<div class="debug-step">'
+    html += '<div class="debug-step-label">最终排序</div>'
+    for (const r of trace.rankedResults) {
+      const badge = r.sourceType === 'pdf' ? '<span class="citation-badge pdf">PDF</span>' : '<span class="citation-badge web">WEB</span>'
+      html += `<div class="debug-result-item">
+        <div class="debug-result-meta">${badge} <span>${r.filename || ''}</span> <span style="color:#4a9eff">${Math.round((r.score || 0) * 100)}%</span></div>
+        <div class="debug-result-content">${r.contextSnippet || ''}</div>
+      </div>`
+    }
+    html += '</div>'
+  }
+
+  // Prompt 上下文
+  if (trace.promptContext) {
+    html += '<div class="debug-step">'
+    html += '<div class="debug-step-label">Prompt 组装</div>'
+    html += `<div class="debug-step-value">上下文长度: ${trace.promptContext.contextLength} 字符 · 引用数: ${trace.promptContext.citationCount}</div>`
+    html += '</div>'
+  }
+
+  // 耗时
+  if (trace.timings) {
+    html += '<div class="debug-step">'
+    html += '<div class="debug-step-label">耗时</div>'
+    html += '<div class="debug-timing">'
+    if (trace.timings.questionExtraction !== undefined) html += `<div class="debug-timing-item"><span class="debug-timing-label">问题提取</span><span class="debug-timing-value">${trace.timings.questionExtraction}ms</span></div>`
+    if (trace.timings.pdfSearch !== undefined) html += `<div class="debug-timing-item"><span class="debug-timing-label">知识检索</span><span class="debug-timing-value">${trace.timings.pdfSearch}ms</span></div>`
+    if (trace.timings.webSearch !== undefined) html += `<div class="debug-timing-item"><span class="debug-timing-label">Web 搜索</span><span class="debug-timing-value">${trace.timings.webSearch}ms</span></div>`
+    if (trace.timings.total !== undefined) html += `<div class="debug-timing-item"><span class="debug-timing-label">总计</span><span class="debug-timing-value">${trace.timings.total}ms</span></div>`
+    html += '</div></div>'
+  }
+
+  ragDebugContent.innerHTML = html
+}
 
 // --- 初始化 ---
 loadSettings()

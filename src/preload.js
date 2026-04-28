@@ -27,9 +27,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listPDFs: () => ipcRenderer.invoke('list-pdfs'),
   onPDFStatus: (callback) => ipcRenderer.on('pdf-status', (_event, value) => callback(value)),
 
+  // 知识库管理
+  listChunks: (filters) => ipcRenderer.invoke('list-chunks', filters),
+  getChunk: (id) => ipcRenderer.invoke('get-chunk', id),
+  updateChunk: (id, updates) => ipcRenderer.invoke('update-chunk', { id, updates }),
+  deleteChunk: (id) => ipcRenderer.invoke('delete-chunk', id),
+  addChunk: (data) => ipcRenderer.invoke('add-chunk', data),
+  listGroups: () => ipcRenderer.invoke('list-groups'),
+  saveGroups: (groups) => ipcRenderer.invoke('save-groups', groups),
+  setDocumentGroup: (filename, group) => ipcRenderer.invoke('set-document-group', { filename, group }),
+  onRAGDebug: (callback) => ipcRenderer.on('rag-debug', (_event, value) => callback(value)),
+
   // PDF 分析 Agent
   onPDFAgentProgress: (callback) => ipcRenderer.on('pdf-agent-progress', (_event, value) => callback(value)),
   onPDFAgentStream: (callback) => ipcRenderer.on('pdf-agent-stream', (_event, type, value) => callback(type, value)),
+
+  // 本地 ASR 模型管理
+  checkLocalModel: () => ipcRenderer.invoke('check-local-model'),
+  downloadLocalModel: () => ipcRenderer.invoke('download-local-model'),
+  onModelDownloadProgress: (callback) => ipcRenderer.on('model-download-progress', (_event, value) => callback(value)),
 
   // 通用
   onError: (callback) => ipcRenderer.on('transcription-error', (_event, value) => callback(value)),

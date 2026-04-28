@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AI 面试助手</title>
+    <script type="module" crossorigin src="/assets/index-DaFoowDL.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Cd1SHHS6.css">
+  </head>
+  <body>
+    <div class="app">
+      <!-- 顶部栏 -->
+      <header class="header">
+        <div class="header-left">
+          <h1 class="logo">AI 面试助手</h1>
+        </div>
+        <div class="header-center">
+          <div class="mode-switch">
+            <button class="mode-btn active" id="modeCandidateBtn" data-mode="candidate">面试者模式</button>
+            <button class="mode-btn" id="modeInterviewerBtn" data-mode="interviewer">面试官模式</button>
+          </div>
+        </div>
+        <div class="header-right">
+          <button class="icon-btn" id="settingsBtn" title="设置">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="10" cy="10" r="3"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M3.4 3.4l1.4 1.4M15.2 15.2l1.4 1.4M3.4 16.6l1.4-1.4M15.2 4.8l1.4-1.4"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 设置面板 -->
+      <div class="settings-panel hidden" id="settingsPanel">
+        <h3>设置</h3>
+        <div class="setting-item">
+          <label>识别语言</label>
+          <select id="langSelect">
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="auto">自动检测</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label>音频输入设备</label>
+          <select id="audioDeviceSelect"><option value="">默认设备</option></select>
+        </div>
+        <div class="setting-item toggle-item">
+          <label for="systemAudioToggle">捕获系统音频（对方声音）</label>
+          <input type="checkbox" id="systemAudioToggle" />
+        </div>
+        <div class="setting-hint">开启后可识别视频通话中对方的声音，首次使用需授权屏幕录制权限</div>
+        <div class="setting-item">
+          <label>语音识别引擎</label>
+          <select id="asrEngineSelect">
+            <option value="doubao">云端识别（豆包）</option>
+            <option value="local">本地识别（Paraformer）</option>
+          </select>
+        </div>
+        <div class="setting-item model-status-item hidden" id="modelStatusItem">
+          <div class="model-status" id="modelStatus">
+            <span class="model-status-icon" id="modelStatusIcon">⏳</span>
+            <span class="model-status-text" id="modelStatusText">检测模型中...</span>
+          </div>
+          <button class="small-btn primary" id="downloadModelBtn" style="display:none">下载模型</button>
+          <div class="model-progress hidden" id="modelProgress">
+            <div class="model-progress-bar"><div class="model-progress-fill" id="modelProgressFill"></div></div>
+            <span class="model-progress-text" id="modelProgressText">0%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 主内容：双栏布局 -->
+      <div class="main-content">
+        <!-- 左侧：转写 + 知识库 -->
+        <div class="panel panel-left">
+          <div class="panel-section transcript-section">
+            <div class="section-header">
+              <h2>实时转写</h2>
+              <div class="transcript-actions">
+                <button class="small-btn" id="clearTranscriptBtn">清空</button>
+              </div>
+            </div>
+            <div class="transcript-area" id="transcriptArea">
+              <div class="placeholder-text">点击下方按钮开始录音...</div>
+            </div>
+            <div class="record-controls">
+              <button class="record-btn" id="recordBtn">
+                <span class="record-icon" id="recordIcon"></span>
+                <span id="recordLabel">开始录音</span>
+              </button>
+              <span class="record-status" id="statusText"></span>
+            </div>
+          </div>
+
+          <div class="panel-section pdf-section">
+            <div class="section-header">
+              <h2>知识库</h2>
+              <div class="kb-header-actions">
+                <button class="small-btn" id="manageKBBtn">管理</button>
+                <button class="small-btn primary" id="uploadPDFBtn">+ 上传文档</button>
+              </div>
+            </div>
+
+            <!-- 分析进度面板 -->
+            <div class="agent-panel hidden" id="agentPanel">
+              <div class="agent-steps" id="agentSteps"></div>
+              <div class="agent-content" id="agentContent"></div>
+            </div>
+
+            <!-- 知识点列表 -->
+            <div class="pdf-list" id="pdfList">
+              <div class="placeholder-text">上传简历或技术文档，AI 自动分析并生成面试知识库</div>
+            </div>
+            <div class="pdf-status" id="pdfStatus"></div>
+          </div>
+        </div>
+
+        <!-- 右侧：AI 回答 + 历史 -->
+        <div class="panel panel-right">
+          <!-- 面试者模式：AI 回答 -->
+          <div class="panel-section ai-section" id="candidatePanel">
+            <div class="section-header">
+              <h2>AI 助手</h2>
+              <button class="small-btn" id="triggerAIBtn">手动触发 AI</button>
+            </div>
+            <div class="ai-question" id="aiQuestion"></div>
+            <div class="ai-response" id="aiResponse">
+              <div class="placeholder-text">AI 回答将显示在这里...</div>
+            </div>
+            <div class="ai-citations" id="aiCitations"></div>
+
+            <!-- RAG 调试面板 -->
+            <div class="rag-debug-panel hidden" id="ragDebugPanel">
+              <div class="rag-debug-toggle" id="ragDebugToggle">
+                <span>RAG 调试详情</span>
+                <span class="debug-arrow">▸</span>
+              </div>
+              <div class="rag-debug-content hidden" id="ragDebugContent"></div>
+            </div>
+          </div>
+
+          <!-- 面试官模式 -->
+          <div class="panel-section interviewer-section hidden" id="interviewerPanel">
+            <div class="section-header">
+              <h2>面试官工具</h2>
+            </div>
+            <div class="interviewer-controls">
+              <div class="setting-item">
+                <label>职位描述 (JD)</label>
+                <textarea id="jdInput" rows="3" placeholder="输入职位要求..."></textarea>
+              </div>
+              <div class="interviewer-actions">
+                <button class="small-btn primary" id="recommendQuestionsBtn">AI 推荐问题</button>
+                <button class="small-btn" id="evaluateAnswerBtn">评估回答</button>
+              </div>
+            </div>
+            <div class="ai-response" id="interviewerResponse">
+              <div class="placeholder-text">AI 分析将显示在这里...</div>
+            </div>
+          </div>
+
+          <!-- 历史记录 -->
+          <div class="panel-section history-section">
+            <div class="section-header">
+              <h2>对话历史</h2>
+              <button class="small-btn" id="clearHistoryBtn">清空</button>
+            </div>
+            <div class="history-list" id="historyList"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 知识库管理全屏页面 -->
+      <div class="kb-fullpage hidden" id="kbFullpage">
+        <div class="kb-fullpage-header">
+          <div class="kb-fullpage-header-left">
+            <button class="kb-back-btn" id="kbBackBtn">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3L5 8l5 5"/></svg>
+              返回
+            </button>
+            <h1 class="kb-fullpage-title">知识库管理</h1>
+            <span class="kb-chunk-count" id="kbChunkCount"></span>
+          </div>
+          <div class="kb-fullpage-header-right">
+            <button class="small-btn" id="kbUploadBtn">+ 上传文档</button>
+            <button class="small-btn primary" id="kbAddChunkBtn">+ 手动添加</button>
+          </div>
+        </div>
+
+        <div class="kb-fullpage-body">
+          <!-- 左侧：侧边栏 -->
+          <div class="kb-sidebar">
+            <div class="kb-sidebar-section">
+              <div class="kb-sidebar-title">分组</div>
+              <div class="kb-group-list" id="kbGroupList">
+                <div class="kb-group-item active" data-group="">
+                  <span class="kb-group-icon">📁</span>
+                  <span class="kb-group-name">全部</span>
+                  <span class="kb-group-badge" id="kbGroupBadgeAll"></span>
+                </div>
+              </div>
+              <button class="kb-add-group-btn" id="kbAddGroupBtn">+ 新建分组</button>
+            </div>
+
+            <div class="kb-sidebar-section">
+              <div class="kb-sidebar-title">文件来源</div>
+              <div class="kb-file-list" id="kbFileList"></div>
+            </div>
+          </div>
+
+          <!-- 右侧：内容区域 -->
+          <div class="kb-main">
+            <div class="kb-main-toolbar">
+              <div class="kb-search-wrap">
+                <svg class="kb-search-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="5"/><path d="M10.5 10.5L15 15"/></svg>
+                <input type="text" id="kbSearchInput" placeholder="搜索知识片段内容、文件名..." />
+              </div>
+              <div class="kb-view-toggle">
+                <button class="kb-view-btn active" id="kbViewList" title="列表视图">☰</button>
+                <button class="kb-view-btn" id="kbViewGrid" title="卡片视图">⊞</button>
+              </div>
+            </div>
+
+            <div class="kb-chunk-list" id="kbChunkList"></div>
+          </div>
+        </div>
+
+        <!-- 编辑抽屉 -->
+        <div class="kb-drawer-overlay hidden" id="kbDrawerOverlay"></div>
+        <div class="kb-drawer hidden" id="kbDrawer">
+          <div class="kb-drawer-header">
+            <h2 id="kbEditorTitle">编辑知识片段</h2>
+            <button class="kb-drawer-close" id="kbEditorClose">✕</button>
+          </div>
+          <div class="kb-drawer-body">
+            <div class="kb-field">
+              <label>分组</label>
+              <select id="kbEditorGroup"></select>
+            </div>
+            <div class="kb-field">
+              <label>来源文件名</label>
+              <input type="text" id="kbEditorFilename" />
+            </div>
+            <div class="kb-field kb-field-grow">
+              <label>内容</label>
+              <textarea id="kbEditorContent"></textarea>
+            </div>
+          </div>
+          <div class="kb-drawer-footer">
+            <button class="small-btn" id="kbEditorCancel">取消</button>
+            <button class="small-btn primary" id="kbEditorSave">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </body>
+</html>
