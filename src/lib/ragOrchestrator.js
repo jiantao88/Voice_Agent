@@ -1,5 +1,4 @@
-import { extractQuestionFromTranscript } from './questionExtractor.js';
-import { extractQuestionLocally, generateSearchQuery } from './localQuestionExtractor.js';
+import { extractQuestion, generateSearchQuery } from './questionExtractor.js';
 import { pineconeService } from './pineconeService.js';
 import { webSearchAgent } from './webSearch.js';
 
@@ -10,24 +9,12 @@ class RAGOrchestrator {
     const totalStart = Date.now();
 
     try {
-      let extractedQuestion = null;
       const qStart = Date.now();
-      let extractionMethod = 'none';
-      try {
-        extractedQuestion = await extractQuestionFromTranscript(transcript);
-        if (!extractedQuestion || extractedQuestion.confidence < 0.4) extractedQuestion = null;
-        else extractionMethod = 'cloud';
-      } catch (error) {
-        const localQuestion = extractQuestionLocally(transcript);
-        if (localQuestion && localQuestion.confidence >= 0.5) {
-          extractedQuestion = localQuestion;
-          extractionMethod = 'local';
-        }
-      }
+      const extractedQuestion = await extractQuestion(transcript);
       if (debugTrace) {
         debugTrace.timings.questionExtraction = Date.now() - qStart;
         debugTrace.extractedQuestion = extractedQuestion
-          ? { question: extractedQuestion.question, confidence: extractedQuestion.confidence, method: extractionMethod }
+          ? { question: extractedQuestion.question, confidence: extractedQuestion.confidence, method: extractedQuestion.method }
           : null;
       }
 
