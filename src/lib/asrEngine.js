@@ -10,7 +10,7 @@ import { startLocal, feedAudioLocal, stopLocal } from './localASR.js';
 
 const DOUBAO_CONFIG = {
   resourceId: 'volc.seedasr.sauc.duration',
-  wsUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+  wsUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async',
   get apiKey() { return process.env.DOUBAO_API_KEY; },
 };
 
@@ -44,6 +44,7 @@ function buildFullClientRequest(lang) {
       enable_ddc: false,
       result_type: 'full',
       show_utterances: true,
+      enable_nonstream: true,
       enable_speaker_info: true,
       ssd_version: '200',
     },
@@ -140,10 +141,14 @@ function startDoubao(lang, onResult, onError) {
         const result = parsed.payload?.result;
         if (result) {
           const rawUtterances = result.utterances || [];
+          if (rawUtterances.length > 0) {
+            const sample = rawUtterances[0];
+            console.log(`[DOUBAO] utterance[0] keys: ${Object.keys(sample).join(',')}, definite: ${sample.definite}, additions: ${JSON.stringify(sample.additions || 'none')}`);
+          }
           const utterances = rawUtterances.map(u => ({
             text: u.text || '',
             definite: u.definite || false,
-            speaker: u.additions?.speaker || null,
+            speaker: u.additions?.speaker_id ?? u.additions?.speaker ?? null,
           }));
           const speakers = utterances.filter(u => u.speaker).map(u => `"${u.text.slice(0,10)}"→spk${u.speaker}`);
           if (speakers.length > 0) {

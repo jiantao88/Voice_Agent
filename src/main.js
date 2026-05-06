@@ -154,6 +154,16 @@ const routes = {
     const active = interviewSessionStore.getActiveSession();
     if (!active) return { success: false, error: 'No active interview session' };
     const review = buildInterviewReview(active);
+    if (Number(review.summary?.totalQuestions || 0) === 0) {
+      interviewSessionStore.discardSession(active.id);
+      return {
+        success: true,
+        discarded: true,
+        review,
+        knowledgeCount: 0,
+        message: '未生成复盘：没有识别到面试官问题',
+      };
+    }
     const knowledgeCount = options.addToKnowledgeBase === false
       ? 0
       : await persistReviewKnowledge({ review, session: active, pineconeService });

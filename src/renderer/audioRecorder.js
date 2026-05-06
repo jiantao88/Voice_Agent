@@ -13,7 +13,7 @@ function downsample(float32, fromRate, toRate) {
   return out;
 }
 
-export function createAudioRecorder({ elements, segmentManager, electronAPI, getActivePosition, getCurrentMode }) {
+export function createAudioRecorder({ elements, segmentManager, electronAPI, getActivePosition, getCurrentMode, onReviewComplete }) {
   const { recordBtn, recordLabel, statusText, langSelect, asrEngineSelect, audioDeviceSelect, systemAudioToggle } = elements;
 
   let isRecording = false;
@@ -25,6 +25,8 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
   let dualStream = false;
   let captureSystemAudio = localStorage.getItem('capture-system-audio') === 'true';
   let reviewSessionActive = false;
+  let isStarting = false;
+  let isStopping = false;
 
   const silenceState = {};
 
@@ -84,10 +86,13 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
   });
 
   recordBtn.addEventListener('click', async () => {
+    if (isStarting || isStopping) return;
     if (!isRecording) await start(); else await stop();
   });
 
   async function start() {
+    isStarting = true;
+    recordBtn.disabled = true;
     try {
       const constraints = { audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } };
       const deviceId = audioDeviceSelect.value;
@@ -109,32 +114,50 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
       recordLabel.textContent = '停止录音';
     } catch (err) {
       statusText.textContent = `音频访问失败: ${err.message}`;
+      if (reviewSessionActive) {
+        await electronAPI.endInterviewSession({ addToKnowledgeBase: false }).catch(() => null);
+      }
+      reviewSessionActive = false;
+    } finally {
+      isStarting = false;
+      recordBtn.disabled = false;
     }
   }
 
   async function stop() {
+    isStopping = true;
+    recordBtn.disabled = true;
     let reviewStatusText = '';
-    await stopStreaming();
-    clearAllSilence();
+    try {
+      await stopStreaming();
+      clearAllSilence();
 
-    if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-    if (systemAudioStream) {
-      systemAudioStream.getTracks().forEach(t => t.stop());
-      systemAudioStream = null;
-      await electronAPI.disableLoopbackAudio();
-    }
-
-    segmentManager.finalizeIfEmpty();
-    if (reviewSessionActive) {
-      statusText.textContent = '正在生成面试复盘...';
-      const result = await electronAPI.endInterviewSession({ addToKnowledgeBase: true });
-      reviewSessionActive = false;
-      if (result.success) {
-        const summary = result.review?.summary || {};
-        reviewStatusText = `复盘完成：识别 ${summary.totalQuestions || 0} 个问题，薄弱 ${summary.weakQuestionCount || 0} 个，入库 ${result.knowledgeCount || 0} 条`;
-      } else {
-        reviewStatusText = `复盘失败：${result.error || '未知错误'}`;
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (systemAudioStream) {
+        systemAudioStream.getTracks().forEach(t => t.stop());
+        systemAudioStream = null;
+        await electronAPI.disableLoopbackAudio();
       }
+
+      segmentManager.finalizeIfEmpty();
+      if (reviewSessionActive) {
+        statusText.textContent = '正在生成面试复盘...';
+        const result = await electronAPI.endInterviewSession({ addToKnowledgeBase: true });
+        reviewSessionActive = false;
+        if (result.success && result.discarded) {
+          reviewStatusText = result.message || '未生成复盘：没有识别到面试官问题';
+          onReviewComplete?.(result);
+        } else if (result.success) {
+          const summary = result.review?.summary || {};
+          reviewStatusText = `复盘完成：识别 ${summary.totalQuestions || 0} 个问题，薄弱 ${summary.weakQuestionCount || 0} 个，入库 ${result.knowledgeCount || 0} 条`;
+          onReviewComplete?.(result);
+        } else {
+          reviewStatusText = `复盘失败：${result.error || '未知错误'}`;
+        }
+      }
+    } finally {
+      isStopping = false;
+      recordBtn.disabled = false;
     }
     isRecording = false;
     dualStream = false;

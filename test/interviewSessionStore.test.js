@@ -37,4 +37,39 @@ describe('InterviewSessionStore', () => {
     expect(saved.aiInteractions).toHaveLength(1);
     expect(saved.review.summary.totalQuestions).toBe(1);
   });
+
+  it('reuses an active session instead of creating duplicates', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'vtt-interview-sessions-'));
+    cleanup.push(dir);
+    const store = new InterviewSessionStore({ storePath: path.join(dir, 'sessions.json') });
+
+    const first = store.startSession({ position: 'frontend' });
+    const second = store.startSession({ position: 'frontend' });
+
+    expect(second.id).toBe(first.id);
+    expect(store.listSessions()).toHaveLength(0);
+  });
+
+  it('hides empty reviews and supports discarding them', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'vtt-interview-sessions-'));
+    cleanup.push(dir);
+    const store = new InterviewSessionStore({ storePath: path.join(dir, 'sessions.json') });
+
+    const empty = store.startSession({ position: 'frontend' });
+    store.endSession(empty.id, {
+      review: { summary: { totalQuestions: 0, weakQuestionCount: 0 }, weakQuestions: [] },
+      knowledgeCount: 0,
+    });
+    const useful = store.startSession({ position: 'frontend' });
+    store.endSession(useful.id, {
+      review: { summary: { totalQuestions: 2, weakQuestionCount: 1 }, weakQuestions: [{}] },
+      knowledgeCount: 1,
+    });
+
+    expect(store.listSessions()).toHaveLength(1);
+    expect(store.listSessions()[0].id).toBe(useful.id);
+
+    store.discardSession(useful.id);
+    expect(store.listSessions()).toHaveLength(0);
+  });
 });

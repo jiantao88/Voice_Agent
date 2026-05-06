@@ -32,6 +32,9 @@ export class InterviewSessionStore {
 
   startSession({ position = '', mode = 'candidate', title = '' } = {}) {
     this.#load();
+    const active = this.getActiveSession();
+    if (active && !active.endedAt) return active;
+
     const now = new Date().toISOString();
     const session = {
       id: crypto.randomUUID(),
@@ -117,7 +120,21 @@ export class InterviewSessionStore {
 
   listSessions() {
     this.#load();
-    return this.sessions.map(compactSession);
+    return this.sessions
+      .filter(session => session.endedAt && session.review && Number(session.review?.summary?.totalQuestions || 0) > 0)
+      .map(compactSession);
+  }
+
+  discardSession(id) {
+    this.#load();
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter(session => session.id !== id);
+    if (this.activeSessionId === id) this.activeSessionId = null;
+    if (this.sessions.length !== before) {
+      this.#save();
+      return true;
+    }
+    return false;
   }
 
   #path() {

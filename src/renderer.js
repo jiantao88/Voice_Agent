@@ -5,6 +5,7 @@ import { createAudioRecorder } from './renderer/audioRecorder.js';
 import { createAIChat } from './renderer/aiChat.js';
 import { createKnowledgeBase } from './renderer/knowledgeBase.js';
 import { createSettings } from './renderer/settings.js';
+import { createInterviewReviews } from './renderer/interviewReviews.js';
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -48,6 +49,9 @@ const elements = {
   systemAudioToggle: $('systemAudioToggle'),
   agentPanel: $('agentPanel'), agentSteps: $('agentSteps'), agentContent: $('agentContent'),
   positionSelect: $('positionSelect'),
+  reviewSessionList: $('reviewSessionList'), reviewRefreshBtn: $('reviewRefreshBtn'),
+  reviewDetailPanel: $('reviewDetailPanel'), reviewDetailTitle: $('reviewDetailTitle'),
+  reviewDetailContent: $('reviewDetailContent'), reviewDetailClose: $('reviewDetailClose'),
 };
 
 const electronAPI = window.electronAPI;
@@ -81,12 +85,18 @@ const kb = createKnowledgeBase({
   refreshPDFList: () => settings.refreshPDFList(),
 });
 
+const interviewReviews = createInterviewReviews({
+  elements,
+  electronAPI,
+});
+
 createAudioRecorder({
   elements,
   segmentManager,
   electronAPI,
   getActivePosition: () => settings.getActivePosition(),
   getCurrentMode: () => settings.getCurrentMode(),
+  onReviewComplete: () => interviewReviews.refreshReviewSessions(),
 });
 
 // --- IPC: 流式识别结果 ---
@@ -133,4 +143,5 @@ elements.clearTranscriptBtn.addEventListener('click', () => segmentManager.clear
 settings.loadSettings();
 settings.renderHistory();
 settings.refreshPDFList();
+interviewReviews.refreshReviewSessions();
 segmentManager.render();
