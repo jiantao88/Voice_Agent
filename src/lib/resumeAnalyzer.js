@@ -137,6 +137,11 @@ class ResumeAnalyzer {
       d => !(d.filename === filename && d.type === 'knowledge')
     );
 
+    // 从 category 自动推断 position/domain，并更新 groups
+    const groups = pineconeService.getGroups();
+    const categoryMap = this.#buildCategoryMap(docs, groups);
+    pineconeService.saveGroups(groups);
+
     for (let i = 0; i < docs.length; i++) {
       try {
         const doc = docs[i];
@@ -148,9 +153,12 @@ class ResumeAnalyzer {
           console.error(`[ResumeAnalyzer] Embedding failed for "${doc.topic}":`, embErr.message);
         }
 
+        const mapped = categoryMap.get(doc.category) || { position: '', domain: '' };
+
         pineconeService.documents.push({
           id: crypto.randomUUID(),
-          group: '',
+          position: mapped.position,
+          domain: mapped.domain,
           sourceType: 'pdf',
           createdAt: Date.now(),
           updatedAt: Date.now(),
@@ -177,6 +185,31 @@ class ResumeAnalyzer {
 
     pineconeService.save();
     console.log(`[ResumeAnalyzer] Stored ${docs.length} knowledge docs for ${filename}`);
+  }
+
+  #buildCategoryMap(docs, groups) {
+    const map = new Map();
+    const categories = [...new Set(docs.map(d => d.category))];
+
+    for (const category of categories) {
+      const matchedPosition = pineconeService.classifyCategory(category);
+      const domainId = category.toLowerCase().replace(/[^a-z0-9一-鿿]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const domainName = category;
+
+      let pos = groups.positions.find(p => p.id === matchedPosition);
+      if (!pos) {
+        pos = { id: matchedPosition, name: matchedPosition === 'frontend' ? '前端' : matchedPosition === 'backend' ? '后端' : '通用', domains: [] };
+        groups.positions.push(pos);
+      }
+
+      if (!pos.domains.some(d => d.id === domainId)) {
+        pos.domains.push({ id: domainId, name: domainName });
+      }
+
+      map.set(category, { position: matchedPosition, domain: domainId });
+    }
+
+    return map;
   }
 }
 

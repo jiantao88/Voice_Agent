@@ -9,9 +9,9 @@ import { startLocal, feedAudioLocal, stopLocal } from './localASR.js';
 // ============================================================
 
 const DOUBAO_CONFIG = {
-  apiKey: process.env.DOUBAO_API_KEY,
   resourceId: 'volc.seedasr.sauc.duration',
   wsUrl: 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+  get apiKey() { return process.env.DOUBAO_API_KEY; },
 };
 
 const PROTOCOL_VERSION = 0b0001;
@@ -37,7 +37,16 @@ function buildFullClientRequest(lang) {
   const payload = {
     user: { uid: 'electron-vtt', did: os.hostname(), platform: `${process.platform}-electron` },
     audio: { format: 'pcm', codec: 'raw', rate: 16000, bits: 16, channel: 1 },
-    request: { model_name: 'bigmodel', enable_itn: true, enable_punc: true, enable_ddc: false, result_type: 'full' },
+    request: {
+      model_name: 'bigmodel',
+      enable_itn: true,
+      enable_punc: true,
+      enable_ddc: false,
+      result_type: 'full',
+      show_utterances: true,
+      enable_speaker_info: true,
+      ssd_version: '200',
+    },
   };
 
   if (lang && lang !== 'auto') {
@@ -95,11 +104,10 @@ function parseServerResponse(data) {
 }
 
 // ============================================================
-// 豆包引擎
+// 多实例管理
 // ============================================================
 
-let wsConnection = null;
-let doubaoChunkCount = 0;
+const instances = new Map();
 
 function startDoubao(lang, onResult, onError) {
   return new Promise((resolve, reject) => {
@@ -116,9 +124,7 @@ function startDoubao(lang, onResult, onError) {
     ws.on('open', () => {
       console.log('[DOUBAO] WebSocket connected');
       ws.send(buildFullClientRequest(lang));
-      wsConnection = ws;
-      doubaoChunkCount = 0;
-      resolve();
+      resolve(ws);
     });
 
     ws.on('message', (data) => {
@@ -133,9 +139,19 @@ function startDoubao(lang, onResult, onError) {
       if (parsed.type === 'result') {
         const result = parsed.payload?.result;
         if (result) {
+          const rawUtterances = result.utterances || [];
+          const utterances = rawUtterances.map(u => ({
+            text: u.text || '',
+            definite: u.definite || false,
+            speaker: u.additions?.speaker || null,
+          }));
+          const speakers = utterances.filter(u => u.speaker).map(u => `"${u.text.slice(0,10)}"→spk${u.speaker}`);
+          if (speakers.length > 0) {
+            console.log(`[DOUBAO-SSD] speakers: ${speakers.join(', ')}`);
+          }
           onResult?.({
             text: result.text || '',
-            utterances: result.utterances || [],
+            utterances,
             isLast: parsed.isLast,
           });
         }
@@ -149,73 +165,81 @@ function startDoubao(lang, onResult, onError) {
         const msg = `WebSocket 握手失败 [${res.statusCode}]: ${body}`;
         console.error(msg);
         onError?.(msg);
-        wsConnection = null;
         reject(new Error(msg));
       });
     });
 
     ws.on('error', (err) => {
       onError?.(`WebSocket 错误: ${err.message}`);
-      wsConnection = null;
       reject(err);
     });
 
-    ws.on('close', () => { wsConnection = null; });
+    ws.on('close', () => {});
   });
 }
 
-function feedAudioDoubao(pcmDataInt16, isLast) {
-  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
+function feedAudioDoubao(ws, chunkCount, pcmDataInt16, isLast) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return chunkCount;
   const int16 = Int16Array.from(pcmDataInt16);
   const pcmBuffer = Buffer.from(int16.buffer);
-  if (doubaoChunkCount % 20 === 0) {
-    console.log(`[DOUBAO] Sending chunk #${doubaoChunkCount}, bytes: ${pcmBuffer.length}, isLast: ${isLast}`);
+  if (chunkCount % 20 === 0) {
+    console.log(`[DOUBAO] Sending chunk #${chunkCount}, bytes: ${pcmBuffer.length}, isLast: ${isLast}`);
   }
-  doubaoChunkCount++;
-  wsConnection.send(buildAudioPacket(pcmBuffer, isLast));
+  ws.send(buildAudioPacket(pcmBuffer, isLast));
+  return chunkCount + 1;
 }
 
-function stopDoubao() {
-  if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) return;
-  wsConnection.send(buildAudioPacket(Buffer.alloc(0), true));
+function stopDoubao(ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(buildAudioPacket(Buffer.alloc(0), true));
   setTimeout(() => {
-    if (wsConnection) {
-      wsConnection.close();
-      wsConnection = null;
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close();
     }
   }, 2000);
 }
 
 // ============================================================
-// ASR 引擎分发
+// ASR 引擎分发（多实例）
 // ============================================================
 
-let currentEngine = 'doubao';
+export async function startASR(settings, onResult, onError, sourceId = 'default') {
+  const engine = settings.asrEngine || 'doubao';
+  console.log(`[ASR] Starting engine: ${engine} (source: ${sourceId})`);
 
-export async function startASR(settings, onResult, onError) {
-  currentEngine = settings.asrEngine || 'doubao';
-  console.log(`[ASR] Starting engine: ${currentEngine}`);
+  const inst = { engine, chunkCount: 0 };
 
-  if (currentEngine === 'local') {
-    startLocal(settings.lang, onResult, onError);
+  if (engine === 'local') {
+    inst.local = startLocal(settings.lang, onResult, onError);
   } else {
-    await startDoubao(settings.lang, onResult, onError);
+    inst.ws = await startDoubao(settings.lang, onResult, onError);
+  }
+
+  instances.set(sourceId, inst);
+}
+
+export function feedAudio(pcmData, isLast, sourceId = 'default') {
+  const inst = instances.get(sourceId);
+  if (!inst) return;
+
+  if (inst.engine === 'local') {
+    feedAudioLocal(inst.local, pcmData, isLast);
+  } else {
+    inst.chunkCount = feedAudioDoubao(inst.ws, inst.chunkCount, pcmData, isLast);
   }
 }
 
-export function feedAudio(pcmData, isLast) {
-  if (currentEngine === 'local') {
-    feedAudioLocal(pcmData, isLast);
-  } else {
-    feedAudioDoubao(pcmData, isLast);
-  }
-}
+export function stopASR(sourceId = 'default') {
+  const inst = instances.get(sourceId);
+  if (!inst) return;
 
-export function stopASR() {
-  console.log(`[ASR] Stopping engine: ${currentEngine}`);
-  if (currentEngine === 'local') {
-    stopLocal();
+  console.log(`[ASR] Stopping engine: ${inst.engine} (source: ${sourceId})`);
+
+  if (inst.engine === 'local') {
+    stopLocal(inst.local);
   } else {
-    stopDoubao();
+    stopDoubao(inst.ws);
   }
+
+  instances.delete(sourceId);
 }

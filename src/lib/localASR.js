@@ -1,11 +1,5 @@
 import { checkModel } from './modelDownloader.js';
 
-let recognizer = null;
-let stream = null;
-let resultCallback = null;
-let errorCallback = null;
-let chunkCount = 0;
-
 export function startLocal(lang, onResult, onError) {
   const sherpaOnnx = require('sherpa-onnx-node');
 
@@ -35,17 +29,17 @@ export function startLocal(lang, onResult, onError) {
     rule3MinUtteranceLength: 20,
   };
 
-  recognizer = new sherpaOnnx.OnlineRecognizer(config);
-  stream = recognizer.createStream();
-  resultCallback = onResult;
-  errorCallback = onError;
-  chunkCount = 0;
+  const recognizer = new sherpaOnnx.OnlineRecognizer(config);
+  const stream = recognizer.createStream();
 
+  const instance = { recognizer, stream, resultCallback: onResult, errorCallback: onError, chunkCount: 0 };
   console.log('[LocalASR] Started');
+  return instance;
 }
 
-export function feedAudioLocal(pcmDataInt16, isLast) {
-  if (!recognizer || !stream) return;
+export function feedAudioLocal(instance, pcmDataInt16, isLast) {
+  if (!instance || !instance.recognizer || !instance.stream) return;
+  const { recognizer, stream } = instance;
 
   try {
     if (pcmDataInt16.length > 0) {
@@ -64,14 +58,14 @@ export function feedAudioLocal(pcmDataInt16, isLast) {
       const text = result.text?.trim() || '';
 
       if (text) {
-        if (chunkCount % 20 === 0) {
-          console.log(`[LocalASR] chunk #${chunkCount}, text: "${text.substring(0, 50)}"`);
+        if (instance.chunkCount % 20 === 0) {
+          console.log(`[LocalASR] chunk #${instance.chunkCount}, text: "${text.substring(0, 50)}"`);
         }
-        chunkCount++;
+        instance.chunkCount++;
 
         const isEndpoint = recognizer.isEndpoint(stream);
 
-        resultCallback?.({
+        instance.resultCallback?.({
           text,
           utterances: [{ text, definite: isEndpoint }],
           isLast: false,
@@ -92,29 +86,30 @@ export function feedAudioLocal(pcmDataInt16, isLast) {
       const finalText = finalResult.text?.trim() || '';
 
       if (finalText) {
-        resultCallback?.({
+        instance.resultCallback?.({
           text: finalText,
           utterances: [{ text: finalText, definite: true }],
           isLast: true,
         });
       }
 
-      stopLocal();
+      stopLocal(instance);
     }
   } catch (err) {
     console.error('[LocalASR] feedAudio error:', err);
-    errorCallback?.(`本地识别错误: ${err.message}`);
+    instance.errorCallback?.(`本地识别错误: ${err.message}`);
   }
 }
 
-export function stopLocal() {
-  if (stream) {
+export function stopLocal(instance) {
+  if (!instance) return;
+  if (instance.stream) {
     try {
-      stream.free?.();
+      instance.stream.free?.();
     } catch (_) {}
-    stream = null;
+    instance.stream = null;
   }
-  resultCallback = null;
-  errorCallback = null;
+  instance.resultCallback = null;
+  instance.errorCallback = null;
   console.log('[LocalASR] Stopped');
 }

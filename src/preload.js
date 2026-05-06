@@ -6,8 +6,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 豆包流式识别
   startStream: (settings) => ipcRenderer.invoke('start-doubao-stream', settings),
-  sendChunk: (pcmData, isLast) => ipcRenderer.invoke('send-audio-chunk', pcmData, isLast),
-  stopStream: () => ipcRenderer.invoke('stop-doubao-stream'),
+  sendChunk: (pcmData, isLast, sourceId) => ipcRenderer.invoke('send-audio-chunk', pcmData, isLast, sourceId),
+  stopStream: (sourceId) => ipcRenderer.invoke('stop-doubao-stream', sourceId),
   onStreamResult: (callback) => ipcRenderer.on('stream-result', (_event, value) => callback(value)),
   onStreamError: (callback) => ipcRenderer.on('stream-error', (_event, value) => callback(value)),
 
@@ -16,10 +16,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disableLoopbackAudio: () => ipcRenderer.invoke('disable-loopback-audio'),
 
   // AI 面试助手
-  aiCompletion: (text, mode, background) => ipcRenderer.invoke('ai-completion', { text, mode, background }),
+  aiCompletion: (text, mode, background, position) => ipcRenderer.invoke('ai-completion', { text, mode, background, position }),
+  setActivePosition: (position) => ipcRenderer.invoke('set-active-position', { position }),
   onAIStream: (callback) => ipcRenderer.on('ai-stream', (_event, value) => callback(value)),
   onAIStreamEnd: (callback) => ipcRenderer.on('ai-stream-end', (_event, value) => callback(value)),
   onAIQuestion: (callback) => ipcRenderer.on('ai-question', (_event, value) => callback(value)),
+
+  // 面试复盘 MVP
+  startInterviewSession: (payload) => ipcRenderer.invoke('start-interview-session', payload),
+  recordInterviewSegment: (segment) => ipcRenderer.invoke('record-interview-segment', segment),
+  endInterviewSession: (options) => ipcRenderer.invoke('end-interview-session', options),
+  listInterviewSessions: () => ipcRenderer.invoke('list-interview-sessions'),
+  getInterviewSession: (id) => ipcRenderer.invoke('get-interview-session', id),
 
   // PDF 管理
   uploadPDF: () => ipcRenderer.invoke('upload-pdf'),
@@ -35,7 +43,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addChunk: (data) => ipcRenderer.invoke('add-chunk', data),
   listGroups: () => ipcRenderer.invoke('list-groups'),
   saveGroups: (groups) => ipcRenderer.invoke('save-groups', groups),
-  setDocumentGroup: (filename, group) => ipcRenderer.invoke('set-document-group', { filename, group }),
+  setDocumentGroup: (filename, position, domain) => ipcRenderer.invoke('set-document-group', { filename, position, domain }),
+  reclassifyChunks: () => ipcRenderer.invoke('reclassify-chunks'),
   onRAGDebug: (callback) => ipcRenderer.on('rag-debug', (_event, value) => callback(value)),
 
   // PDF 分析 Agent

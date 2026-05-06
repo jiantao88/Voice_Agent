@@ -42,6 +42,23 @@ Question: ${extractedQuestion}
 Provide a clear, comprehensive response using both the context and your expertise:`;
 }
 
+export function buildContextualRAGPrompt(bg, conversation, history, extractedQuestion, context) {
+  const historyBlock = history
+    ? `\n对话历史（用于理解追问上下文）:\n${history}\n`
+    : '';
+
+  return `你是一位专业的面试助手。基于提供的知识库上下文、对话历史和你的专业知识，给出最全面准确的回答。
+
+知识库上下文:
+${context}
+
+${bg ? `背景信息: ${bg}` : ''}
+${historyBlock}
+当前问题: ${extractedQuestion}
+
+请用中文回答，简洁有条理，重点突出:`;
+}
+
 export function buildSummarizerPrompt(text) {
   return `You are a summarizer. Summarize the following text. Only write summary.
 Content:

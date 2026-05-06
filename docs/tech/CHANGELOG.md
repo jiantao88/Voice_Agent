@@ -1,5 +1,50 @@
 # 技术改动记录
 
+## 2026-05-01 — 知识库二级分组 + 智能搜索 + 对话上下文
+
+**动机：** 知识库无法按岗位区分，面试时搜索不够精准，面试官的跨岗位问题和多轮追问场景需要更好的处理。
+
+### 数据 Schema 迁移
+- `group` 字段拆分为 `position`（岗位）+ `domain`（领域）
+- `pineconeService.load()` 自动迁移旧数据
+- 分组数据结构：`{ positions: [{ id, name, domains: [{ id, name }] }] }`
+- 默认只创建三个空岗位（前端/后端/通用），域名由上传文档自动创建
+
+### 搜索改为加权评分
+- `searchSimilarContent()` 不再硬过滤 group，改为 position-boosted 加权：
+  - 当前岗位匹配：score × 1.3
+  - 通用岗位：score × 1.15
+  - 其他岗位：原始分数
+- topK 从 3 提升到 5
+
+### 问题提取重写
+- `questionExtractor.js` 移除 LLM 调用（`queryChat`），改为纯中文 regex 模式匹配
+- 新增中文问句模式：请你说说/什么是/如何/怎么/为什么/哪些 等
+- `generateSearchQuery()` 增加中文停用词过滤
+- 节省每次请求约 500ms
+
+### 对话上下文
+- 新增 `conversationBuffer.js`：多轮对话缓冲（最多 6 轮）
+- `getSearchHint()` 从最近 2 条用户消息提取关键词，增强 embedding 搜索
+- `getRecentContext()` 返回格式化的对话历史，注入 RAG prompt
+
+### 自动分类
+- `pineconeService.classifyCategory(category)` 集中关键词→岗位映射逻辑
+- `resumeAnalyzer.js` 上传时用 AI 提取的 category 自动分配 position/domain
+- 新增 `reclassifyUnassigned()` 方法 + `reclassify-chunks` IPC，一键修复未分类片段
+
+### 新增文件
+- `src/lib/conversationBuffer.js` — 对话上下文缓冲
+- `src/lib/prompts.js` — Prompt 模板集合（含上下文感知 RAG prompt）
+
+### 新增/修改 IPC
+- `ai-completion` 新增 `position` 参数
+- 新增 `set-active-position`
+- 新增 `reclassify-chunks`
+- `set-document-group` 参数从 `{ filename, group }` 改为 `{ filename, position, domain }`
+
+---
+
 ## 2026-04-28 — 集成 sherpa-onnx 本地语音识别
 
 **动机：** 原有豆包云端 ASR 依赖网络且有 API 费用，发现端侧模型（如 SenseVoice、Paraformer）已足够成熟，决定集成本地识别能力。
@@ -46,15 +91,15 @@
 
 **改动文件：** `src/lib/pineconeService.js`
 
-**新增字段：** id（UUID）、group（分组名）、sourceType（pdf/markdown/manual）、createdAt/updatedAt（时间戳）
+**新增字段：** id（UUID）、sourceType（pdf/markdown/manual）、createdAt/updatedAt（时间戳）、position（岗位）、domain（领域）
 
-**迁移策略：** `load()` 时自动检测旧数据并回填默认值，迁移后自动保存
+**迁移策略：** `load()` 时自动检测旧数据并回填默认值（含 group→position/domain 迁移），迁移后自动保存
 
 **新增功能：**
 - Chunk CRUD：getChunks / getChunkById / updateChunk / deleteChunk / addChunk
 - 分组管理：getGroups / saveGroups / setDocumentGroup（独立 groups.json）
 - Markdown 上传：uploadMarkdown + splitMarkdownByHeadings
-- 搜索支持 group 过滤
+- 搜索支持 position 加权评分
 
 ---
 
@@ -64,6 +109,7 @@
 
 - 支持 group 过滤（传入 options.group 限定搜索范围）
 - 新增 debug 模式：收集完整 trace（extractedQuestion → searchQuery → pdfResults → webResults → rankedResults → promptContext → timings）
+- 后续升级为 position 加权搜索 + contextHint 增强查询（见 2026-05-01 条目）
 
 ---
 
@@ -84,7 +130,7 @@
 - `src/lib/ragOrchestrator.js` — RAG 管道：问题提取 → 知识库搜索 → Web 搜索 → 排序 → Prompt 组装
 - `src/lib/pineconeService.js` — 本地向量存储（cosine similarity），替代 Pinecone 云服务
 - `src/lib/resumeAnalyzer.js` — PDF 分析 4 步 Agent：解析 → 技术栈分析 → 知识文档生成 → 向量化存储
-- `src/lib/questionExtractor.js` + `localQuestionExtractor.js` — 面试问题提取
+- `src/lib/questionExtractor.js` — 面试问题提取（后重写为纯中文 regex，见 2026-05-01）
 - `src/lib/webSearch.js` — Tavily Web 搜索集成
 - `src/lib/safePdfParse.js` — pdf-parse 安全封装
 

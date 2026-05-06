@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, session, desktopCapturer, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, session, desktopCapturer, dialog, systemPreferences } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,6 +10,7 @@ dotenvConfig({ path: path.join(app.getAppPath(), '.env') });
 const loopbackFeatures = [
   'MacLoopbackAudioForScreenShare',
   'MacSckSystemAudioLoopbackOverride',
+  'MacCatapSystemAudioLoopbackCapture',
   'PulseaudioLoopbackForScreenShare',
 ];
 const existing = app.commandLine.getSwitchValue('enable-features');
@@ -59,6 +60,9 @@ import { interviewEngine } from './lib/interviewEngine.js';
 import { pineconeService } from './lib/pineconeService.js';
 import { resumeAnalyzer } from './lib/resumeAnalyzer.js';
 import { registerIPC } from './lib/ipcRouter.js';
+import { interviewSessionStore } from './lib/interviewSessionStore.js';
+import { buildInterviewReview } from './lib/interviewReviewAnalyzer.js';
+import { persistReviewKnowledge } from './lib/reviewKnowledgeService.js';
 
 // ============================================================
 // IPC Routes (declarative)
@@ -67,9 +71,13 @@ import { registerIPC } from './lib/ipcRouter.js';
 const routes = {
   // --- 系统音频捕获 ---
   'enable-loopback-audio': async () => {
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    const screenStatus = systemPreferences.getMediaAccessStatus('screen');
+    console.log(`[Loopback] Permission: mic=${micStatus}, screen=${screenStatus}`);
     session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
       const sources = await desktopCapturer.getSources({ types: ['screen'] });
       if (sources.length === 0) throw new Error('No screen sources found');
+      console.log(`[Loopback] Using source: ${sources[0].name}, id: ${sources[0].id}`);
       callback({ video: sources[0], audio: 'loopback' });
     });
   },
@@ -80,21 +88,23 @@ const routes = {
 
   // --- ASR ---
   'start-doubao-stream': async (_ctx, settings) => {
+    const sourceId = settings.sourceId || 'default';
     await startASR(
       settings,
-      (result) => send('stream-result', result),
-      (msg) => send('stream-error', msg),
+      (result) => send('stream-result', { ...result, sourceId }),
+      (msg) => send('stream-error', { message: msg, sourceId }),
+      sourceId,
     );
     return { success: true };
   },
 
-  'send-audio-chunk': async (_ctx, pcmData, isLast) => {
-    feedAudio(pcmData, isLast);
+  'send-audio-chunk': async (_ctx, pcmData, isLast, sourceId) => {
+    feedAudio(pcmData, isLast, sourceId || 'default');
     return { success: true };
   },
 
-  'stop-doubao-stream': async () => {
-    stopASR();
+  'stop-doubao-stream': async (_ctx, sourceId) => {
+    stopASR(sourceId || 'default');
     return { success: true };
   },
 
@@ -119,9 +129,44 @@ const routes = {
   },
 
   // --- AI 面试 ---
-  'ai-completion': async (_ctx, { text, mode, background }) => {
-    await interviewEngine.process(text, mode, background, send);
+  'ai-completion': async (_ctx, { text, mode, background, position }) => {
+    await interviewEngine.process(text, mode, background, send, { position });
     return { success: true };
+  },
+
+  'set-active-position': async (_ctx, { position }) => {
+    interviewEngine.setActivePosition(position);
+    return { success: true };
+  },
+
+  // --- 面试复盘 MVP ---
+  'start-interview-session': async (_ctx, payload = {}) => {
+    const session = interviewSessionStore.startSession(payload);
+    return { success: true, session };
+  },
+
+  'record-interview-segment': async (_ctx, segment) => {
+    const session = interviewSessionStore.recordSegment(segment);
+    return { success: true, recorded: Boolean(session) };
+  },
+
+  'end-interview-session': async (_ctx, options = {}) => {
+    const active = interviewSessionStore.getActiveSession();
+    if (!active) return { success: false, error: 'No active interview session' };
+    const review = buildInterviewReview(active);
+    const knowledgeCount = options.addToKnowledgeBase === false
+      ? 0
+      : await persistReviewKnowledge({ review, session: active, pineconeService });
+    const session = interviewSessionStore.endSession(active.id, { review, knowledgeCount });
+    return { success: true, session, review, knowledgeCount };
+  },
+
+  'list-interview-sessions': async () => ({ success: true, sessions: interviewSessionStore.listSessions() }),
+
+  'get-interview-session': async (_ctx, id) => {
+    const session = interviewSessionStore.getSession(id);
+    if (!session) throw new Error('Interview session not found');
+    return { success: true, session };
   },
 
   // --- PDF 上传 ---
@@ -179,7 +224,8 @@ const routes = {
   // --- 分组 ---
   'list-groups': async () => ({ success: true, groups: pineconeService.getGroups() }),
   'save-groups': async (_ctx, groups) => { pineconeService.saveGroups(groups); return { success: true }; },
-  'set-document-group': async (_ctx, { filename, group }) => ({ success: true, count: pineconeService.setDocumentGroup(filename, group) }),
+  'set-document-group': async (_ctx, { filename, position, domain }) => ({ success: true, count: pineconeService.setDocumentGroup(filename, position, domain) }),
+  'reclassify-chunks': async () => ({ success: true, count: pineconeService.reclassifyUnassigned() }),
 };
 
 // ============================================================

@@ -17,6 +17,9 @@
             <button class="mode-btn active" id="modeCandidateBtn" data-mode="candidate">面试者模式</button>
             <button class="mode-btn" id="modeInterviewerBtn" data-mode="interviewer">面试官模式</button>
           </div>
+          <select id="positionSelect" class="position-select" title="当前面试岗位">
+            <option value="">全部岗位</option>
+          </select>
         </div>
         <div class="header-right">
           <button class="icon-btn" id="settingsBtn" title="设置">
@@ -180,6 +183,7 @@
             <span class="kb-chunk-count" id="kbChunkCount"></span>
           </div>
           <div class="kb-fullpage-header-right">
+            <button class="small-btn" id="kbReclassifyBtn">自动分类</button>
             <button class="small-btn" id="kbUploadBtn">+ 上传文档</button>
             <button class="small-btn primary" id="kbAddChunkBtn">+ 手动添加</button>
           </div>
@@ -198,11 +202,26 @@
                 </div>
               </div>
               <button class="kb-add-group-btn" id="kbAddGroupBtn">+ 新建分组</button>
+              <div class="kb-add-group-form hidden" id="kbAddGroupForm">
+                <select id="kbNewGroupPosition" class="kb-inline-select">
+                  <option value="">选择岗位...</option>
+                </select>
+                <input type="text" id="kbNewGroupDomain" class="kb-inline-input" placeholder="领域名称" />
+                <div class="kb-inline-actions">
+                  <button class="small-btn primary" id="kbNewGroupConfirm">添加</button>
+                  <button class="small-btn" id="kbNewGroupCancel">取消</button>
+                </div>
+              </div>
             </div>
 
             <div class="kb-sidebar-section">
               <div class="kb-sidebar-title">文件来源</div>
               <div class="kb-file-list" id="kbFileList"></div>
+              <div class="kb-file-assign hidden" id="kbFileAssign">
+                <label>分配到：</label>
+                <select id="kbFileAssignSelect" class="kb-inline-select"></select>
+                <button class="small-btn primary" id="kbFileAssignConfirm">确认</button>
+              </div>
             </div>
           </div>
 

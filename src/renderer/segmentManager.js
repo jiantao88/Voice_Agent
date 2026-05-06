@@ -1,11 +1,18 @@
-export function createSegmentManager({ elements, onRequestAI }) {
+export function createSegmentManager({ elements, onRequestAI, onSegmentChange }) {
   const { transcriptArea } = elements;
 
   let segments = [];
-  let currentSegmentId = null;
   let selectedSegmentId = null;
   let segmentIdCounter = 0;
-  let consumedText = '';
+
+  const sourceState = new Map();
+
+  function getSource(sourceId) {
+    if (!sourceState.has(sourceId)) {
+      sourceState.set(sourceId, { currentSegmentId: null, consumedText: '' });
+    }
+    return sourceState.get(sourceId);
+  }
 
   function getSelectedText() {
     if (selectedSegmentId !== null) {
@@ -16,53 +23,113 @@ export function createSegmentManager({ elements, onRequestAI }) {
     return '';
   }
 
-  function startNewSegment() {
-    const newSeg = { id: segmentIdCounter++, text: '', timestamp: new Date().toLocaleTimeString() };
+  function startNewSegment(sourceId = 'default') {
+    const state = getSource(sourceId);
+    const newSeg = { id: segmentIdCounter++, text: '', timestamp: new Date().toLocaleTimeString(), source: sourceId };
     segments.push(newSeg);
-    currentSegmentId = newSeg.id;
-    consumedText = '';
+    state.currentSegmentId = newSeg.id;
+    state.consumedText = '';
+    emitSegmentChange('start', newSeg);
     render();
   }
 
-  function finalizeCurrentSegment() {
-    if (currentSegmentId === null) return;
-    const seg = segments.find(s => s.id === currentSegmentId);
+  function finalizeCurrentSegment(sourceId = 'default') {
+    const state = getSource(sourceId);
+    if (state.currentSegmentId === null) return;
+    const seg = segments.find(s => s.id === state.currentSegmentId);
     if (!seg || !seg.text.trim()) return;
 
     seg.finalized = true;
-    consumedText += seg.text;
+    state.consumedText += seg.text;
+    emitSegmentChange('finalize', seg);
 
-    const newSeg = { id: segmentIdCounter++, text: '', timestamp: new Date().toLocaleTimeString() };
+    const newSeg = { id: segmentIdCounter++, text: '', timestamp: new Date().toLocaleTimeString(), source: sourceId };
     segments.push(newSeg);
-    currentSegmentId = newSeg.id;
+    state.currentSegmentId = newSeg.id;
+    emitSegmentChange('start', newSeg);
     render();
   }
 
-  function finalizeIfEmpty() {
-    const idx = segments.findIndex(s => s.id === currentSegmentId);
-    if (idx !== -1 && !segments[idx].text.trim()) segments.splice(idx, 1);
-    currentSegmentId = null;
+  function finalizeIfEmpty(sourceId) {
+    if (sourceId !== undefined) {
+      const state = getSource(sourceId);
+      const idx = segments.findIndex(s => s.id === state.currentSegmentId);
+      if (idx !== -1 && !segments[idx].text.trim()) segments.splice(idx, 1);
+      state.currentSegmentId = null;
+    } else {
+      for (const [, state] of sourceState) {
+        const idx = segments.findIndex(s => s.id === state.currentSegmentId);
+        if (idx !== -1 && !segments[idx].text.trim()) segments.splice(idx, 1);
+        state.currentSegmentId = null;
+      }
+    }
     render();
   }
 
-  function updateCurrentSegment(fullText) {
-    if (currentSegmentId === null) return;
-    const seg = segments.find(s => s.id === currentSegmentId);
-    if (seg) {
-      seg.text = fullText.length > consumedText.length ? fullText.substring(consumedText.length) : fullText;
+  function updateCurrentSegment(fullText, sourceId = 'default', speakerId = null) {
+    const state = getSource(sourceId);
+    if (state.currentSegmentId === null) return;
+    const seg = segments.find(s => s.id === state.currentSegmentId);
+    if (!seg) return;
+
+    if (speakerId !== null && seg.speaker !== undefined && seg.speaker !== null && seg.speaker !== speakerId && seg.text.trim()) {
+      seg.finalized = true;
+      state.consumedText += seg.text;
+      emitSegmentChange('finalize', seg);
+
+      const newSeg = { id: segmentIdCounter++, text: '', timestamp: new Date().toLocaleTimeString(), source: sourceId, speaker: speakerId };
+      segments.push(newSeg);
+      state.currentSegmentId = newSeg.id;
+      emitSegmentChange('start', newSeg);
+    }
+
+    const current = segments.find(s => s.id === state.currentSegmentId);
+    if (current) {
+      current.text = fullText.length > state.consumedText.length ? fullText.substring(state.consumedText.length) : fullText;
+      if (speakerId !== null) current.speaker = speakerId;
+      emitSegmentChange('update', current);
     }
     render();
   }
 
   function clear() {
     segments = [];
-    currentSegmentId = null;
     selectedSegmentId = null;
+    sourceState.clear();
     render();
   }
 
+  function isCurrentSegment(segId) {
+    for (const [, state] of sourceState) {
+      if (state.currentSegmentId === segId) return true;
+    }
+    return false;
+  }
+
+  function getSpeakerRole(seg) {
+    if (seg.speaker !== undefined && seg.speaker !== null) {
+      return seg.speaker === '0' ? 'me' : 'interviewer';
+    }
+    if (seg.source === 'mic') return 'me';
+    if (seg.source === 'system') return 'interviewer';
+    return null;
+  }
+
+  function emitSegmentChange(action, seg) {
+    const role = getSpeakerRole(seg);
+    onSegmentChange?.({
+      action,
+      id: seg.id,
+      source: seg.source,
+      speaker: role === 'interviewer' ? 'interviewer' : 'candidate',
+      text: seg.text || '',
+      timestamp: seg.timestamp,
+      finalized: Boolean(seg.finalized),
+    });
+  }
+
   function render() {
-    if (segments.length === 0 && !currentSegmentId) {
+    if (segments.length === 0 && sourceState.size === 0) {
       transcriptArea.innerHTML = '<div class="placeholder-text">点击下方按钮开始录音...</div>';
       return;
     }
@@ -72,10 +139,23 @@ export function createSegmentManager({ elements, onRequestAI }) {
       const div = document.createElement('div');
       div.className = 'segment';
       if (seg.id === selectedSegmentId) div.classList.add('selected');
-      if (seg.id === currentSegmentId && !seg.finalized) div.classList.add('recording');
+      const isCurrent = isCurrentSegment(seg.id);
+      if (isCurrent && !seg.finalized) div.classList.add('recording');
+
+      const role = getSpeakerRole(seg);
+      if (role === 'me') div.classList.add('speaker-me');
+      else if (role === 'interviewer') div.classList.add('speaker-interviewer');
 
       const header = document.createElement('div');
       header.className = 'segment-header';
+
+      if (role) {
+        const speaker = document.createElement('span');
+        speaker.className = 'segment-speaker';
+        speaker.textContent = role === 'me' ? '我' : '面试官';
+        header.appendChild(speaker);
+      }
+
       const time = document.createElement('span');
       time.className = 'segment-time';
       time.textContent = seg.timestamp;
@@ -105,7 +185,7 @@ export function createSegmentManager({ elements, onRequestAI }) {
       div.appendChild(header);
       div.appendChild(text);
       div.addEventListener('click', () => {
-        if (seg.id === currentSegmentId && !seg.finalized) return;
+        if (isCurrent && !seg.finalized) return;
         selectedSegmentId = selectedSegmentId === seg.id ? null : seg.id;
         render();
       });

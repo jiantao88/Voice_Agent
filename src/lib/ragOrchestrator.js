@@ -1,16 +1,23 @@
 import { extractQuestion, generateSearchQuery } from './questionExtractor.js';
 import { pineconeService } from './pineconeService.js';
 import { webSearchAgent } from './webSearch.js';
+import { RagMetricsLogger } from './ragMetricsLogger.js';
+import { app } from 'electron';
+import path from 'node:path';
+import crypto from 'node:crypto';
 
 class RAGOrchestrator {
+  #metricsLogger = null;
+
   async processTranscript(transcript, background, options = {}) {
-    const { group, debug } = options;
+    const { position, contextHint, debug } = options;
     const debugTrace = debug ? { timings: {} } : null;
     const totalStart = Date.now();
+    const queryId = crypto.randomUUID();
 
     try {
       const qStart = Date.now();
-      const extractedQuestion = await extractQuestion(transcript);
+      const extractedQuestion = extractQuestion(transcript);
       if (debugTrace) {
         debugTrace.timings.questionExtraction = Date.now() - qStart;
         debugTrace.extractedQuestion = extractedQuestion
@@ -19,24 +26,52 @@ class RAGOrchestrator {
       }
 
       let searchQuery = extractedQuestion?.question || generateSearchQuery(transcript);
-      if (!searchQuery || searchQuery.length < 10) {
+      if (!searchQuery || searchQuery.length < 2) {
         if (debugTrace) debugTrace.searchQuery = searchQuery || '';
         return { extractedQuestion: null, context: { pdfResults: [], webResults: [], combinedContext: '', citations: [] }, searchPerformed: false, debugTrace };
       }
-      if (debugTrace) debugTrace.searchQuery = searchQuery;
+
+      const enhancedQuery = contextHint ? `${contextHint} ${searchQuery}` : searchQuery;
+      if (debugTrace) {
+        debugTrace.searchQuery = searchQuery;
+        debugTrace.enhancedQuery = enhancedQuery;
+        debugTrace.contextHint = contextHint || '';
+        debugTrace.queryId = queryId;
+      }
 
       const pdfStart = Date.now();
-      const webStart = Date.now();
-      const [pdfResults, webSearchResponse] = await Promise.all([
-        pineconeService.searchSimilarContent(searchQuery, 3, { group }).catch(() => []),
-        webSearchAgent.searchWeb(searchQuery, 3).catch(() => ({ results: [] })),
-      ]);
+      const pdfResults = await pineconeService.searchSimilarContent(enhancedQuery, 5, { position }).catch(() => []);
+      const searchMetrics = pineconeService.getLastSearchMetrics();
+      const pdfLatencyMs = Date.now() - pdfStart;
+      const skipWebSearch = Boolean(searchMetrics?.isStrongHit);
+
+      let webSearchResponse = { results: [] };
+      let webLatencyMs = 0;
+      if (!skipWebSearch) {
+        const webStart = Date.now();
+        webSearchResponse = await webSearchAgent.searchWeb(searchQuery, 3).catch(() => ({ results: [] }));
+        webLatencyMs = Date.now() - webStart;
+      }
+
+      const metricsEvent = searchMetrics
+        ? this.#getMetricsLogger().recordSearch({
+            queryId,
+            position: position || '',
+            ...searchMetrics,
+          })
+        : null;
+      const todaySummary = this.#getMetricsLogger().getTodaySummary();
       if (debugTrace) {
-        debugTrace.timings.pdfSearch = Date.now() - pdfStart;
-        debugTrace.timings.webSearch = Date.now() - webStart;
+        debugTrace.timings.pdfSearch = pdfLatencyMs;
+        debugTrace.timings.webSearch = webLatencyMs;
+        debugTrace.webSearchSkipped = skipWebSearch;
+        debugTrace.webSearchSkipReason = skipWebSearch ? 'strong_kb_hit' : '';
+        debugTrace.knowledgeMetrics = metricsEvent;
+        debugTrace.knowledgeMetricsSummary = todaySummary;
         debugTrace.pdfResults = pdfResults.map(r => ({
           id: r.id, content: r.content.substring(0, 200), score: r.score,
-          filename: r.metadata?.filename, group: r.group, page: r.page,
+          filename: r.metadata?.filename, position: r.position, domain: r.domain, page: r.page,
+          matchSources: r.matchSources || [],
         }));
         debugTrace.webResults = (webSearchResponse.results || []).map(r => ({
           content: (r.snippet || '').substring(0, 200), score: r.score, link: r.link,
@@ -121,6 +156,15 @@ class RAGOrchestrator {
 
   async deletePDF(filename) {
     return await pineconeService.deleteDocument(filename);
+  }
+
+  #getMetricsLogger() {
+    if (!this.#metricsLogger) {
+      this.#metricsLogger = new RagMetricsLogger({
+        metricsDir: path.join(app.getPath('userData'), 'metrics'),
+      });
+    }
+    return this.#metricsLogger;
   }
 }
 

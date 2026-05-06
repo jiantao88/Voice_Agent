@@ -35,9 +35,24 @@ export async function queryChat(messages, model) {
 }
 
 export async function generateEmbedding(text) {
-  const response = await getClient().embeddings.create({
-    model: 'text-embedding-3-large',
-    input: text,
+  const apiKey = process.env.EMBEDDING_API_KEY || process.env.LLM_API_KEY || '';
+  const baseURL = (process.env.EMBEDDING_BASE_URL || process.env.LLM_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+  const model = process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
+  const response = await fetch(`${baseURL}/embeddings`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, input: text }),
   });
-  return response.data[0].embedding;
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error?.message || `Embedding request failed with status ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = data?.error?.code;
+    throw error;
+  }
+  return data.data?.[0]?.embedding || [];
 }

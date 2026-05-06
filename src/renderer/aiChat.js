@@ -1,6 +1,123 @@
 import { marked } from 'marked';
 
-export function createAIChat({ elements, electronAPI, getSelectedText, getCurrentMode, addToHistory }) {
+function pct(value) {
+  return `${Math.round((value || 0) * 100)}%`;
+}
+
+function ms(value) {
+  return `${Math.round(value || 0)}ms`;
+}
+
+function labelMatchSources(sources = []) {
+  const hasFts = sources.includes('fts');
+  const hasVec = sources.includes('vec');
+  if (hasFts && hasVec) return 'FTS + 向量';
+  if (hasFts) return 'FTS';
+  if (hasVec) return '向量';
+  return '无';
+}
+
+function hitLabel(metrics) {
+  if (!metrics?.isHit) return '未命中';
+  return metrics.isStrongHit ? '强命中' : '弱命中';
+}
+
+function latencyWidth(value, max) {
+  if (!value || !max) return 0;
+  return Math.max(3, Math.min(100, Math.round((value / max) * 100)));
+}
+
+function latencyRow({ label, value, detail, skipped }, max) {
+  const width = latencyWidth(value, max);
+  const valueLabel = skipped ? '已跳过' : ms(value);
+  const detailHTML = detail ? `<span class="rag-latency-detail">${detail}</span>` : '';
+  return `
+    <div class="rag-latency-row${skipped ? ' skipped' : ''}">
+      <div class="rag-latency-label">${label}${detailHTML}</div>
+      <div class="rag-latency-track"><div class="rag-latency-fill" style="width:${skipped ? 0 : width}%"></div></div>
+      <strong class="rag-latency-value">${valueLabel}</strong>
+    </div>
+  `;
+}
+
+function buildLatencyWaterfallHTML(trace = {}) {
+  const timings = trace.timings || {};
+  const metrics = trace.knowledgeMetrics || {};
+  const knowledgeTimings = metrics.timings || {};
+  const llm = trace.llmMetrics || {};
+  const rows = [
+    { label: '问题提取', value: timings.questionExtraction },
+    {
+      label: 'Embedding',
+      value: knowledgeTimings.embedding,
+      detail: metrics.embeddingCacheHit ? '缓存命中' : '实时生成',
+    },
+    { label: 'FTS5', value: knowledgeTimings.fts },
+    { label: '向量检索', value: knowledgeTimings.vector },
+    { label: '结果合并', value: knowledgeTimings.merge },
+    {
+      label: 'Web 搜索',
+      value: timings.webSearch,
+      skipped: trace.webSearchSkipped,
+      detail: trace.webSearchSkipped ? '强命中跳过' : '',
+    },
+    { label: 'RAG 总计', value: timings.total },
+    { label: 'LLM 首 token', value: llm.firstToken },
+    { label: 'LLM 总耗时', value: llm.total, detail: llm.model || '' },
+  ].filter(row => row.skipped || Number.isFinite(Number(row.value)));
+
+  if (rows.length === 0) return '';
+  const max = Math.max(...rows.map(row => Number(row.value || 0)), 1);
+
+  return `
+    <div class="rag-latency-waterfall">
+      <div class="rag-metric-heading">耗时瀑布</div>
+      ${rows.map(row => latencyRow(row, max)).join('')}
+    </div>
+  `;
+}
+
+export function buildRAGMetricsSummaryHTML(trace = {}) {
+  const metrics = trace.knowledgeMetrics;
+  const summary = trace.knowledgeMetricsSummary;
+  const waterfallHTML = buildLatencyWaterfallHTML(trace);
+  if (!metrics && !summary && !waterfallHTML) return '';
+
+  const topScore = metrics?.topScore ? pct(metrics.topScore) : '0%';
+  const sourceLabel = labelMatchSources(metrics?.topMatchSources || []);
+  const cacheLabel = metrics?.embeddingCacheHit ? '命中' : '未命中';
+  const webLabel = trace.webSearchSkipped ? '强命中跳过' : ms(trace.timings?.webSearch);
+
+  return `
+    <div class="rag-metrics-card">
+      <div class="rag-metrics-title">知识库命中概览</div>
+      <div class="rag-metrics-grid">
+        <div class="rag-metric-block">
+          <div class="rag-metric-heading">本次检索</div>
+          <div class="rag-metric-row"><span>命中状态</span><strong>${hitLabel(metrics)}</strong></div>
+          <div class="rag-metric-row"><span>Top 分数</span><strong>${topScore}</strong></div>
+          <div class="rag-metric-row"><span>命中来源</span><strong>${sourceLabel}</strong></div>
+          <div class="rag-metric-row"><span>返回结果</span><strong>${metrics?.resultCount || 0} 条</strong></div>
+          <div class="rag-metric-row"><span>总耗时</span><strong>${ms(metrics?.timings?.total)}</strong></div>
+          <div class="rag-metric-row"><span>Embedding 缓存</span><strong>${cacheLabel}</strong></div>
+          <div class="rag-metric-row"><span>Web 搜索</span><strong>${webLabel}</strong></div>
+        </div>
+        <div class="rag-metric-block">
+          <div class="rag-metric-heading">今日统计</div>
+          <div class="rag-metric-row"><span>检索次数</span><strong>${summary?.searchCount || 0}</strong></div>
+          <div class="rag-metric-row"><span>知识库</span><strong>命中率 ${pct(summary?.hitRate)}</strong></div>
+          <div class="rag-metric-row"><span>强命中率</span><strong>${pct(summary?.strongHitRate)}</strong></div>
+          <div class="rag-metric-row"><span>缓存命中率</span><strong>${pct(summary?.embeddingCacheHitRate)}</strong></div>
+          <div class="rag-metric-row"><span>平均耗时</span><strong>${ms(summary?.avgLatencyMs)}</strong></div>
+          <div class="rag-metric-row"><span>延迟分位</span><strong>P95 ${ms(summary?.p95LatencyMs)}</strong></div>
+        </div>
+      </div>
+      ${waterfallHTML}
+    </div>
+  `;
+}
+
+export function createAIChat({ elements, electronAPI, getSelectedText, getCurrentMode, getActivePosition, addToHistory }) {
   const { aiQuestion, aiResponse, aiCitations, triggerAIBtn, interviewerResponse, jdInput,
     recommendQuestionsBtn, evaluateAnswerBtn, ragDebugPanel, ragDebugToggle, ragDebugContent,
     agentPanel, agentSteps, agentContent, pdfStatus } = elements;
@@ -43,7 +160,8 @@ export function createAIChat({ elements, electronAPI, getSelectedText, getCurren
 
     const mode = getCurrentMode() === 'candidate' ? 'copilot' : 'interviewer-evaluate';
     const background = getCurrentMode() === 'interviewer' ? jdInput.value : '';
-    await electronAPI.aiCompletion(text, mode, background);
+    const position = getActivePosition();
+    await electronAPI.aiCompletion(text, mode, background, position);
   }
 
   // --- IPC listeners ---
@@ -174,7 +292,7 @@ export function createAIChat({ elements, electronAPI, getSelectedText, getCurren
   }
 
   function renderRAGDebug(trace) {
-    let html = '';
+    let html = buildRAGMetricsSummaryHTML(trace);
 
     html += '<div class="debug-step"><div class="debug-step-label">问题提取</div>';
     if (trace.extractedQuestion) {
@@ -190,7 +308,7 @@ export function createAIChat({ elements, electronAPI, getSelectedText, getCurren
       html += '<div class="debug-step"><div class="debug-step-label">知识库检索</div>';
       for (const r of trace.pdfResults) {
         const pct = Math.round((r.score || 0) * 100);
-        html += `<div class="debug-result-item"><div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div><div class="debug-result-meta"><span>${r.filename || ''}</span>${r.group ? `<span class="kb-chunk-tag">${r.group}</span>` : ''}<span style="color:#4a9eff">${pct}%</span>${r.page ? `<span>P${r.page}</span>` : ''}</div><div class="debug-result-content">${r.content || ''}</div></div>`;
+        html += `<div class="debug-result-item"><div class="debug-score-bar"><div class="debug-score-fill" style="width:${pct}%"></div></div><div class="debug-result-meta"><span>${r.filename || ''}</span>${r.position ? `<span class="kb-chunk-tag">${r.position}</span>` : ''}${r.domain ? `<span class="kb-chunk-tag group">${r.domain}</span>` : ''}<span style="color:#4a9eff">${pct}%</span>${r.page ? `<span>P${r.page}</span>` : ''}</div><div class="debug-result-content">${r.content || ''}</div></div>`;
       }
       html += '</div>';
     }

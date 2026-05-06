@@ -3,9 +3,10 @@ export function createSettings({ elements, electronAPI }) {
     modelStatusItem, modelStatusIcon, modelStatusText, downloadModelBtn, modelProgress,
     modelProgressFill, modelProgressText, systemAudioToggle,
     modeCandidateBtn, modeInterviewerBtn, candidatePanel, interviewerPanel,
-    historyList, clearHistoryBtn, clearTranscriptBtn } = elements;
+    historyList, clearHistoryBtn, clearTranscriptBtn, positionSelect } = elements;
 
   let currentMode = 'candidate';
+  let activePosition = localStorage.getItem('active-position') || '';
   let history = JSON.parse(localStorage.getItem('interview-history') || '[]');
 
   // --- Settings panel ---
@@ -18,6 +19,7 @@ export function createSettings({ elements, electronAPI }) {
     }
     systemAudioToggle.checked = localStorage.getItem('capture-system-audio') === 'true';
     handleAsrEngineChange();
+    loadPositionOptions();
   }
 
   function saveSettings() {
@@ -104,6 +106,29 @@ export function createSettings({ elements, electronAPI }) {
     }
   }
 
+  // --- Position selector ---
+  async function loadPositionOptions() {
+    if (!positionSelect) return;
+    const result = await electronAPI.listGroups();
+    const groups = result.success ? result.groups : { positions: [] };
+    positionSelect.innerHTML = '<option value="">全部岗位</option>';
+    for (const pos of (groups.positions || [])) {
+      const opt = document.createElement('option');
+      opt.value = pos.id;
+      opt.textContent = pos.name;
+      positionSelect.appendChild(opt);
+    }
+    positionSelect.value = activePosition;
+  }
+
+  if (positionSelect) {
+    positionSelect.addEventListener('change', () => {
+      activePosition = positionSelect.value;
+      localStorage.setItem('active-position', activePosition);
+      electronAPI.setActivePosition(activePosition);
+    });
+  }
+
   // --- Mode switching ---
   modeCandidateBtn.addEventListener('click', () => switchMode('candidate'));
   modeInterviewerBtn.addEventListener('click', () => switchMode('interviewer'));
@@ -187,9 +212,11 @@ export function createSettings({ elements, electronAPI }) {
   return {
     loadSettings,
     getCurrentMode: () => currentMode,
+    getActivePosition: () => activePosition,
     switchMode,
     addToHistory,
     renderHistory,
     refreshPDFList,
+    loadPositionOptions,
   };
 }

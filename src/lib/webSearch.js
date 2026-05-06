@@ -1,11 +1,8 @@
 class SimpleWebSearchAgent {
-  constructor() {
-    this.tavilyApiKey = process.env.TAVILY_API_KEY || '';
-  }
-
   async searchWeb(query, numResults = 5) {
     try {
-      if (!this.tavilyApiKey) {
+      const tavilyApiKey = process.env.TAVILY_API_KEY || '';
+      if (!tavilyApiKey) {
         return {
           results: [{
             title: `Search: ${query}`,
@@ -20,7 +17,7 @@ class SimpleWebSearchAgent {
       }
 
       const { tavily } = await import('@tavily/core');
-      const tavilyClient = tavily({ apiKey: this.tavilyApiKey });
+      const tavilyClient = tavily({ apiKey: tavilyApiKey });
 
       const response = await tavilyClient.search(query, {
         search_depth: 'basic',

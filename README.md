@@ -8,7 +8,9 @@
 - **系统音频捕获** — macOS ScreenCaptureKit，无需 BlackHole 等虚拟声卡
 - **面试者模式** — VAD 自动分段 → AI 提取问题 → RAG 搜索知识库 + Web → 流式生成参考答案
 - **面试官模式** — 输入 JD，AI 推荐面试问题 / 评估候选人回答
-- **PDF/Markdown 知识库** — 上传文档自动分析、分块、向量化；全屏管理界面支持 CRUD、分组、搜索
+- **PDF/Markdown 知识库** — 上传文档自动分析、分块、向量化；二级分组（岗位→领域）自动分类；全屏管理界面支持 CRUD、搜索、自动分类
+- **跨岗位智能搜索** — 加权评分而非硬过滤，当前岗位优先但跨岗位问题也能命中
+- **对话上下文感知** — 多轮面试对话缓冲，结合上下文理解面试官真正意图
 - **RAG 调试面板** — 可视化问题提取 → 搜索 → 排序 → Prompt 组装的全流程
 
 ## 快速开始
@@ -27,6 +29,9 @@ npm start
 | `LLM_BASE_URL` | LLM API 地址，默认 `https://api.openai.com/v1` | 否 |
 | `MAIN_MODEL` | 主模型名称，默认 `vtrix-gemini-3-flash-preview` | 否 |
 | `FAST_MODEL` | 快速模型（embedding 等），默认同 MAIN_MODEL | 否 |
+| `EMBEDDING_BASE_URL` | Embedding API 地址；不填则复用 `LLM_BASE_URL` | 否 |
+| `EMBEDDING_API_KEY` | Embedding API 密钥；不填则复用 `LLM_API_KEY` | 否 |
+| `EMBEDDING_MODEL` | Embedding 模型，默认 `text-embedding-3-small` | 否 |
 | `TAVILY_API_KEY` | Tavily Web 搜索 API 密钥 | 否（无则跳过 Web 搜索） |
 | `DOUBAO_API_KEY` | 豆包 ASR API 密钥 | 否（仅云端识别需要） |
 

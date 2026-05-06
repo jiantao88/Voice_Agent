@@ -34,6 +34,11 @@ const elements = {
   kbEditorGroup: $('kbEditorGroup'), kbEditorFilename: $('kbEditorFilename'),
   kbEditorContent: $('kbEditorContent'), kbEditorCancel: $('kbEditorCancel'),
   kbEditorSave: $('kbEditorSave'),
+  kbAddGroupForm: $('kbAddGroupForm'), kbNewGroupPosition: $('kbNewGroupPosition'),
+  kbNewGroupDomain: $('kbNewGroupDomain'), kbNewGroupConfirm: $('kbNewGroupConfirm'),
+  kbNewGroupCancel: $('kbNewGroupCancel'),
+  kbFileAssign: $('kbFileAssign'), kbFileAssignSelect: $('kbFileAssignSelect'),
+  kbFileAssignConfirm: $('kbFileAssignConfirm'), kbReclassifyBtn: $('kbReclassifyBtn'),
   asrEngineSelect: $('asrEngineSelect'), modelStatusItem: $('modelStatusItem'),
   modelStatusIcon: $('modelStatusIcon'), modelStatusText: $('modelStatusText'),
   downloadModelBtn: $('downloadModelBtn'), modelProgress: $('modelProgress'),
@@ -42,6 +47,7 @@ const elements = {
   ragDebugContent: $('ragDebugContent'),
   systemAudioToggle: $('systemAudioToggle'),
   agentPanel: $('agentPanel'), agentSteps: $('agentSteps'), agentContent: $('agentContent'),
+  positionSelect: $('positionSelect'),
 };
 
 const electronAPI = window.electronAPI;
@@ -53,6 +59,11 @@ const settings = createSettings({ elements, electronAPI });
 const segmentManager = createSegmentManager({
   elements,
   onRequestAI: (text) => aiChat.requestAICompletion(text),
+  onSegmentChange: (segment) => {
+    electronAPI.recordInterviewSegment(segment).catch(err => {
+      console.warn('[InterviewReview] Failed to record segment:', err);
+    });
+  },
 });
 
 const aiChat = createAIChat({
@@ -60,6 +71,7 @@ const aiChat = createAIChat({
   electronAPI,
   getSelectedText: () => segmentManager.getSelectedText(),
   getCurrentMode: () => settings.getCurrentMode(),
+  getActivePosition: () => settings.getActivePosition(),
   addToHistory: (q, a) => settings.addToHistory(q, a),
 });
 
@@ -73,20 +85,28 @@ createAudioRecorder({
   elements,
   segmentManager,
   electronAPI,
+  getActivePosition: () => settings.getActivePosition(),
+  getCurrentMode: () => settings.getCurrentMode(),
 });
 
 // --- IPC: 流式识别结果 ---
 electronAPI.onStreamResult((data) => {
+  const sourceId = data.sourceId || 'default';
   let fullText = '';
+  let speakerId = null;
   if (data.utterances && data.utterances.length > 0) {
     fullText = data.utterances.map(u => u.text).join('');
+    const definiteUtterance = data.utterances.find(u => u.definite && u.speaker);
+    const anyWithSpeaker = data.utterances.find(u => u.speaker);
+    speakerId = (definiteUtterance || anyWithSpeaker)?.speaker || null;
   } else if (data.text) {
     fullText = data.text;
   }
-  segmentManager.updateCurrentSegment(fullText);
+  segmentManager.updateCurrentSegment(fullText, sourceId, speakerId);
 });
 
-electronAPI.onStreamError((msg) => {
+electronAPI.onStreamError((data) => {
+  const msg = typeof data === 'string' ? data : data.message;
   elements.statusText.textContent = `错误: ${msg}`;
 });
 

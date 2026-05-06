@@ -6,6 +6,10 @@ module.exports = {
     asar: {
       unpack: '**/*.{node,dylib,so,dll}',
     },
+    extendInfo: {
+      NSMicrophoneUsageDescription: '需要使用麦克风进行语音识别',
+      NSAudioCaptureUsageDescription: '需要捕获系统音频以识别面试官语音',
+    },
   },
   rebuildConfig: {},
   makers: [
