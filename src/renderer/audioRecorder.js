@@ -29,6 +29,8 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
   let isStopping = false;
 
   const silenceState = {};
+  const audioLevels = {};
+  let statusLevelTimer = null;
 
   function resetSilence(sourceId) {
     silenceState[sourceId] = { lastSpeechTime: 0, silenceTimer: null, hasSpokenInSegment: false };
@@ -41,6 +43,23 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
     }
   }
 
+  function startStatusLevelMonitor(label) {
+    stopStatusLevelMonitor();
+    statusLevelTimer = setInterval(() => {
+      const micLevel = audioLevels.mic ?? audioLevels.default ?? 0;
+      const systemLevel = audioLevels.system ?? 0;
+      const micText = micLevel.toFixed(3);
+      const systemText = systemLevel.toFixed(3);
+      statusText.textContent = `${label} · 麦克风 ${micText} · 系统 ${systemText}`;
+    }, 500);
+  }
+
+  function stopStatusLevelMonitor() {
+    if (statusLevelTimer) clearInterval(statusLevelTimer);
+    statusLevelTimer = null;
+    for (const key of Object.keys(audioLevels)) delete audioLevels[key];
+  }
+
   function createAudioHandler(sourceId, nativeSampleRate) {
     let handlerCallCount = 0;
     return (e) => {
@@ -50,6 +69,7 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
       let sum = 0;
       for (let i = 0; i < float32.length; i++) sum += float32[i] * float32[i];
       const rms = Math.sqrt(sum / float32.length);
+      audioLevels[sourceId] = rms;
 
       if (handlerCallCount % 100 === 0) {
         console.log(`[AudioHandler:${sourceId}] call #${handlerCallCount}, rms=${rms.toFixed(6)}, samples=${float32.length}`);
@@ -168,18 +188,24 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
 
   async function startStreaming() {
     const baseSettings = { lang: langSelect.value, asrEngine: asrEngineSelect.value };
-    const isDoubao = baseSettings.asrEngine === 'doubao';
 
     let sysSource = null;
     let sysSampleRate = ASR_SAMPLE_RATE;
 
-    if (captureSystemAudio && !isDoubao) {
+    if (captureSystemAudio) {
       try {
         await electronAPI.enableLoopbackAudio();
         systemAudioStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        for (const track of systemAudioStream.getVideoTracks()) {
+          track.enabled = false;
+        }
+        await electronAPI.disableLoopbackAudio();
 
         const audioTracks = systemAudioStream.getAudioTracks();
         console.log('[DualStream] System audio tracks:', audioTracks.length);
+        if (audioTracks.length === 0) {
+          throw new Error('没有获取到系统音频轨道');
+        }
         if (audioTracks.length > 0) {
           const t = audioTracks[0];
           console.log(`[DualStream] Track state: ${t.readyState}, muted: ${t.muted}, enabled: ${t.enabled}`);
@@ -187,15 +213,19 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
           t.addEventListener('ended', () => console.warn('[DualStream] System audio track ENDED'));
           t.addEventListener('mute', () => console.warn('[DualStream] System audio track MUTED'));
           t.addEventListener('unmute', () => console.log('[DualStream] System audio track UNMUTED'));
-          sysSampleRate = t.getSettings().sampleRate || 48000;
         }
 
-        sysAudioContext = new AudioContext({ sampleRate: sysSampleRate });
+        sysAudioContext = new AudioContext();
+        sysSampleRate = sysAudioContext.sampleRate;
         sysSource = sysAudioContext.createMediaStreamSource(systemAudioStream);
       } catch (err) {
         console.warn('系统音频捕获失败，仅使用麦克风:', err.message);
+        if (systemAudioStream) {
+          systemAudioStream.getTracks().forEach(t => t.stop());
+        }
         systemAudioStream = null;
         if (sysAudioContext) { sysAudioContext.close(); sysAudioContext = null; }
+        await electronAPI.disableLoopbackAudio().catch(() => null);
       }
     }
 
@@ -232,6 +262,7 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
       silenceState['system'].hasSpokenInSegment = false;
 
       statusText.textContent = '正在实时识别（含系统音频 · 说话人分离）...';
+      startStatusLevelMonitor('正在实时识别（含系统音频 · 说话人分离）');
     } else {
       dualStream = false;
 
@@ -252,15 +283,15 @@ export function createAudioRecorder({ elements, segmentManager, electronAPI, get
       silenceState['default'].lastSpeechTime = Date.now();
       silenceState['default'].hasSpokenInSegment = false;
 
-      if (isDoubao && captureSystemAudio) {
-        statusText.textContent = '正在实时识别（说话人分离）...';
-      } else {
-        statusText.textContent = '正在实时识别...';
-      }
+      statusText.textContent = captureSystemAudio
+        ? '正在实时识别（系统音频捕获失败，仅麦克风）...'
+        : '正在实时识别...';
+      startStatusLevelMonitor(statusText.textContent);
     }
   }
 
   async function stopStreaming() {
+    stopStatusLevelMonitor();
     for (const p of processors) p.disconnect();
     processors = [];
     if (micAudioContext) { micAudioContext.close(); micAudioContext = null; }
